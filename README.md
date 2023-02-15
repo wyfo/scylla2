@@ -48,3 +48,9 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 I'm not able to measure performance right now (I have to finish connection pool worker), but assuming what is written in [previous section](#main-differences-with-the-official-driver), especially the zero/one allocation promise, I expect this implementation to be a lot faster.
 
 However, the performance improvement regarding zero-copy deserialization has been quickly measured in https://github.com/scylladb/scylla-rust-driver/issues/571, and this point alone is already quite promising.
+
+## What's next
+
+I've made this project without telling Scylla developers, so, obviously I will have to talk with them.
+
+Actually, I've a second secret project about Scylla and Rust, that I've paused when I started working on this driver. So stay tuned! ;) 
