@@ -2,7 +2,7 @@
 
 This is a POC (with more than 12kloc, maybe not a POC anymore) of a new implementation of the Scylla Rust driver, focusing on performance and memory consumption, but not only.
 
-I've started the development at the end of October 2022, mostly on my spare time. So the development is quite messy (I work mostly during night when kids sleep), and there are still some things to do (hopefully, mostly tests at this time).
+I've started the development at the end of October 2022, mostly on my spare times, so the development is quite messy (I often work during night when kids sleep), and there are still some things to do (hopefully, mostly tests at this time).
 
 Actually, I didn't have the time to finish it completely for the Scylla Summit for which I have made this repository public. The connection pool implementation is incomplete, so it's not currently usable (the driver can still connect and send request to the database using the control connection). I hope I will be able to finish it tonight.
 
