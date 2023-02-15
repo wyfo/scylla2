@@ -40,7 +40,8 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - tracing
 - use default statement config
 - test, tests, and more tests
-- precise benchmark
+- benchmark
+- prepare for tablet partitioning?
 
 ## Performance
 
