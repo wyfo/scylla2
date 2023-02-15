@@ -221,35 +221,3 @@ impl Connection {
             .await
     }
 }
-
-// async fn request_frame(
-//     version: ProtocolVersion,
-//     stream: i16,
-//     request: impl Request,
-// ) -> Result<Vec<u8>, ValueTooBig> {
-//     let size = request.serialized_envelope_size(version, Default::default(), None)?;
-//     let serialize =
-//         |slice| request.serialize_envelope(version, Default::default(), false, None, stream, slice);
-//     Ok(match version {
-//         ProtocolVersion::V4 => {
-//             let mut buffer = vec![0; size];
-//             serialize(&mut buffer);
-//             buffer
-//         }
-//         ProtocolVersion::V5 => {
-//             let mut buffer = vec![0; FRAME_UNCOMPRESSED_HEADER_SIZE + size + FRAME_TRAILER_SIZE];
-//             let header = UncompressedFrameHeader {
-//                 self_contained: true,
-//                 payload_length: size,
-//             };
-//             buffer[..FRAME_UNCOMPRESSED_HEADER_SIZE].copy_from_slice(&header.serialize());
-//             let payload_range =
-//                 FRAME_UNCOMPRESSED_HEADER_SIZE..FRAME_UNCOMPRESSED_HEADER_SIZE + size;
-//             serialize(&mut buffer[payload_range.clone()]);
-//             let crc = crc32(&buffer[payload_range]);
-//             buffer[FRAME_UNCOMPRESSED_HEADER_SIZE + size..].copy_from_slice(&crc);
-//             buffer
-//         }
-//         _ => panic!("unsupported"),
-//     })
-// }

@@ -52,6 +52,7 @@ pub enum SessionEvent {
     },
     SchemaAgreement {
         schema_version: Uuid,
+        address: SocketAddr,
     },
     TopologyUpdate {
         topology: Arc<Topology>,

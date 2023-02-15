@@ -63,6 +63,7 @@ impl From<ControlError> for ExecutionError {
 }
 
 pub(crate) struct ControlConnection {
+    address: SocketAddr,
     version: ProtocolVersion,
     stream_generator: AtomicUsize,
     streams: Arc<Mutex<HashMap<i16, oneshot::Sender<io::Result<Envelope>>>>>,
@@ -111,6 +112,7 @@ impl ControlConnection {
             stop_rx,
         ));
         let connection = Self {
+            address,
             version,
             stream_generator: AtomicUsize::new(0),
             streams,
@@ -203,7 +205,10 @@ impl ControlConnection {
         let schema_versions: HashSet<Uuid> = peers_and_local(peers, local, |(uuid,)| uuid)?;
         Ok(if schema_versions.len() == 1 {
             let schema_version = schema_versions.into_iter().next().unwrap();
-            let event = SessionEvent::SchemaAgreement { schema_version };
+            let event = SessionEvent::SchemaAgreement {
+                schema_version,
+                address: self.address,
+            };
             self.session_events.send(event).ok();
             Some(schema_version)
         } else {

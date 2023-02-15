@@ -64,34 +64,6 @@ pub(crate) struct NodeConfig {
 }
 
 impl NodeConfig {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        authentication_protocol: Option<Arc<dyn AuthenticationProtocol>>,
-        conn_config: ConnectionConfig,
-        compression_min_size: usize,
-        minimal_protocol_version: Option<ProtocolVersion>,
-        orphan_count_threshold: usize,
-        orphan_count_threshold_delay: Duration,
-        #[cfg(feature = "ssl")] ssl_context: Option<openssl::ssl::SslContext>,
-        startup_options: Arc<HashMap<String, String>>,
-    ) -> Self {
-        Self {
-            authentication_protocol,
-            buffer_size: conn_config.buffer_size,
-            compression_min_size,
-            connect_timeout: conn_config.connect_timeout,
-            init_socket: conn_config.init_socket,
-            pool_size: conn_config.pool_size,
-            minimal_protocol_version,
-            orphan_count_threshold,
-            orphan_count_threshold_delay,
-            reconnection_policy: conn_config.reconnection_policy,
-            #[cfg(feature = "ssl")]
-            ssl_context,
-            startup_options,
-        }
-    }
-
     fn compression(&self) -> Option<Compression> {
         self.startup_options
             .get("COMPRESSION")
@@ -161,10 +133,13 @@ pub struct Node {
     active_connection_count: AtomicIsize, // negative means disconnected
     connection_pool: OnceCell<ConnectionPool>,
     status_notify: Notify,
+    session_events: mpsc::UnboundedSender<SessionEvent>,
     connection_tx: mpsc::UnboundedSender<Option<NodeDisconnectionReason>>,
+    schema_agreement_interval: Duration,
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         peer: Peer,
         address: SocketAddr,
@@ -173,6 +148,7 @@ impl Node {
         config: Option<Arc<NodeConfig>>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
         session_events: mpsc::UnboundedSender<SessionEvent>,
+        schema_agreement_interval: Duration,
     ) -> Arc<Self> {
         let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let node = Arc::new(Self {
@@ -183,13 +159,13 @@ impl Node {
             active_connection_count: AtomicIsize::new(0),
             connection_pool: OnceCell::new(),
             status_notify: Notify::new(),
+            session_events,
             connection_tx,
+            schema_agreement_interval,
         });
         assert_eq!(matches!(distance, NodeDistance::Ignored), config.is_none());
         if let Some(config) = config {
-            let worker = node
-                .clone()
-                .worker(config, used_keyspace, session_events, connection_rx);
+            let worker = node.clone().worker(config, used_keyspace, connection_rx);
             tokio::spawn(worker);
         }
         node
@@ -302,10 +278,25 @@ impl Node {
         };
         let schema_versions: HashSet<Uuid> =
             peers_and_local(peers.ok()?, local.ok()?, |(uuid,)| uuid)?;
-        if schema_versions.len() == 1 {
-            Ok(schema_versions.into_iter().next())
+        Ok(if schema_versions.len() == 1 {
+            let schema_version = schema_versions.into_iter().next().unwrap();
+            let event = SessionEvent::SchemaAgreement {
+                schema_version,
+                address: self.address,
+            };
+            self.session_events.send(event).ok();
+            Some(schema_version)
         } else {
-            Ok(None)
+            None
+        })
+    }
+
+    pub async fn wait_schema_agreement(&self) -> Uuid {
+        loop {
+            if let Ok(Some(schema_version)) = self.check_schema_agreement().await {
+                return schema_version;
+            }
+            tokio::time::sleep(self.schema_agreement_interval).await;
         }
     }
 
@@ -317,7 +308,6 @@ impl Node {
         self: Arc<Self>,
         config: Arc<NodeConfig>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-        session_events: mpsc::UnboundedSender<SessionEvent>,
         connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
     ) {
         todo!()

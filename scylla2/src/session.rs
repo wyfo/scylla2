@@ -21,6 +21,7 @@ use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use crate::{
+    connection::config::ConnectionConfig,
     error::{
         ConnectionExecutionError, ExecutionError, InvalidKeyspace, OngoingUseKeyspace,
         SessionError, UseKeyspaceError,
@@ -106,18 +107,22 @@ impl Session {
         let startup_options = Arc::new(config.startup_options);
         let local_heartbeat_interval = config.connection_local.heartbeat_interval;
         let remote_heartbeat_interval = config.connection_remote.heartbeat_interval;
-        let node_config = |conn_conf| {
-            Arc::new(NodeConfig::new(
-                authentication_protocol.clone(),
-                conn_conf,
-                config.compression_minimal_size,
-                config.minimal_protocol_version,
-                config.orphan_count_threshold,
-                config.orphan_count_threshold_delay,
+        let node_config = |conn_cfg: ConnectionConfig| {
+            Arc::new(NodeConfig {
+                authentication_protocol: authentication_protocol.clone(),
+                buffer_size: conn_cfg.buffer_size,
+                compression_min_size: config.compression_minimal_size,
+                connect_timeout: conn_cfg.connect_timeout,
+                init_socket: conn_cfg.init_socket,
+                pool_size: conn_cfg.pool_size,
+                minimal_protocol_version: config.minimal_protocol_version,
+                orphan_count_threshold: config.orphan_count_threshold,
+                orphan_count_threshold_delay: config.orphan_count_threshold_delay,
+                reconnection_policy: conn_cfg.reconnection_policy,
                 #[cfg(feature = "ssl")]
-                config.ssl_context.clone(),
-                startup_options.clone(),
-            ))
+                ssl_context: config.ssl_context.clone(),
+                startup_options: startup_options.clone(),
+            })
         };
         let node_config_local = node_config(config.connection_local);
         let node_config_remote = node_config(config.connection_remote);
@@ -323,17 +328,11 @@ impl Session {
                                 Some(timeout),
                             ) = (&response.body, self.0.auto_await_schema_agreement_timeout)
                             {
-                                tokio::time::timeout(timeout, async {
-                                    while let Ok(None) | Err(_) =
-                                        node.check_schema_agreement().await
-                                    {
-                                        tokio::time::sleep(self.0.schema_agreement_interval).await;
-                                    }
-                                })
-                                .await
-                                .map_err(|_| {
-                                    ExecutionError::SchemaAgreementTimeout(event.clone())
-                                })?;
+                                tokio::time::timeout(timeout, node.wait_schema_agreement())
+                                    .await
+                                    .map_err(|_| {
+                                        ExecutionError::SchemaAgreementTimeout(event.clone())
+                                    })?;
                             }
                             return Ok(ExecutionResult::from_response(
                                 response,
@@ -610,6 +609,7 @@ impl Session {
             node_config,
             self.0.keyspace_used.clone(),
             self.0.session_events_internal.clone(),
+            self.0.schema_agreement_interval,
         );
         Some((node, true))
     }

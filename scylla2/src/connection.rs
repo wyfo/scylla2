@@ -28,10 +28,7 @@ use swap_buffer_queue::{
 use tokio::{io::ReadHalf, sync::oneshot};
 
 use crate::{
-    connection::{
-        stream::{InvalidStream, StreamPool},
-        tcp::TcpConnection,
-    },
+    connection::{stream::StreamPool, tcp::TcpConnection},
     error::ConnectionExecutionError,
     topology::node::Node,
     utils::other_error,
