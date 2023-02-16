@@ -32,7 +32,7 @@ where
     V: QueryValues,
 {
     fn opcode(&self) -> OpCode {
-        OpCode::Query
+        OpCode::Execute
     }
 
     fn check(

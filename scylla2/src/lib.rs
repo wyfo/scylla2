@@ -49,5 +49,20 @@ mod test {
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
         );
+        let stmt = session
+            .prepare("SELECT key FROM system.local where key = 'local'")
+            .await
+            .unwrap();
+        println!("stmt = {stmt:?}");
+        println!(
+            "{:?}",
+            session
+                .execute(&stmt, ())
+                .await
+                .unwrap()
+                .rows::<(String,)>()
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+        );
     }
 }

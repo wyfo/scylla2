@@ -21,7 +21,6 @@ use crate::{
     connection::config::InitSocket, error::ConnectionError, topology::sharding::ShardInfo,
 };
 
-#[derive(Debug)]
 pub(crate) enum TcpConnection {
     Tcp(TcpStream),
     #[cfg(feature = "ssl")]
