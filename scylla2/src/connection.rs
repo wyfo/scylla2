@@ -6,6 +6,7 @@ use std::{
     sync::{mpsc, Arc},
     time::Duration,
 };
+use std::fs::read;
 
 use futures::FutureExt;
 use scylla2_cql::{
@@ -189,13 +190,11 @@ impl Connection {
 
     pub(crate) async fn task(
         &self,
-        index: usize,
         get_self: impl (Fn() -> &'static Self) + Clone + Send + Sync + 'static,
         connection: TcpConnection,
         orphan_count_threshold_delay: Duration,
         stop: oneshot::Receiver<()>,
-        closed_connections: mpsc::Sender<(usize, Option<io::Error>)>,
-    ) {
+    ) -> Option<io::Error> {
         self.slice_queue.reopen();
         self.vectored_queue.reopen();
         let (reader, writer) = tokio::io::split(connection);
@@ -222,9 +221,7 @@ impl Connection {
         orphan_task.abort();
         orphan_task.await.ok();
         self.stream_pool.reset();
-        closed_connections
-            .send((index, write_error.or(read_error)))
-            .ok();
+        write_error.or(read_error)
     }
 
     async fn read_task(

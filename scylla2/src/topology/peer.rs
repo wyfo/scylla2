@@ -33,24 +33,26 @@ pub enum ShardAwarePort {
     ShardAwarePort(u16),
 }
 
+// Is there an interest for AddressTranslator to take &Peer instead of IpAddr?
+
 #[async_trait::async_trait]
 pub trait AddressTranslator: Send + Sync {
     async fn translate(
         &self,
-        peer: &Peer,
+        address: IpAddr,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>;
 }
 
 #[async_trait::async_trait]
 impl<F> AddressTranslator for F
 where
-    F: Send + Sync + Fn(&Peer) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>,
+    F: Send + Sync + Fn(IpAddr) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>,
 {
     async fn translate(
         &self,
-        peer: &Peer,
+        address: IpAddr,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
-        self(peer)
+        self(address)
     }
 }
 
@@ -63,15 +65,15 @@ pub enum NodeDistance {
 
 #[async_trait::async_trait]
 pub trait NodeLocalizer: Send + Sync {
-    async fn distance(&self, peer: &Peer, address: SocketAddr) -> NodeDistance;
+    async fn distance(&self, peer: &Peer) -> NodeDistance;
 }
 
 #[async_trait::async_trait]
 impl<F> NodeLocalizer for F
 where
-    F: Send + Sync + Fn(&Peer, SocketAddr) -> NodeDistance,
+    F: Send + Sync + Fn(&Peer) -> NodeDistance,
 {
-    async fn distance(&self, peer: &Peer, address: SocketAddr) -> NodeDistance {
-        self(peer, address)
+    async fn distance(&self, peer: &Peer) -> NodeDistance {
+        self(peer)
     }
 }

@@ -69,8 +69,8 @@ impl Default for SessionConfig {
         }
         Self {
             address_translator: Arc::new(
-                |peer: &Peer| -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
-                    Ok(((peer.rpc_address, 9042).into(), None))
+                |ip: IpAddr| -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
+                    Ok(((ip, 9042).into(), None))
                 },
             ),
             authentication_protocol: None,
@@ -81,7 +81,7 @@ impl Default for SessionConfig {
             database_event_channel: broadcast::channel(10).0,
             database_event_filter: None,
             minimal_protocol_version: None,
-            node_localizer: Arc::new(|_: &Peer, _: SocketAddr| NodeDistance::Remote),
+            node_localizer: Arc::new(|_: &Peer| NodeDistance::Remote),
             nodes: Vec::default(),
             orphan_count_threshold: usize::MAX,
             orphan_count_threshold_delay: Duration::from_secs(1),
@@ -231,7 +231,7 @@ impl SessionConfig {
 
     pub fn datacenter(self, datacenter: impl Into<String>) -> Self {
         let datacenter = datacenter.into();
-        self.node_localizer(move |peer: &Peer, _: SocketAddr| {
+        self.node_localizer(move |peer: &Peer| {
             peer.datacenter
                 .as_ref()
                 .filter(|dc| *dc == &datacenter)

@@ -2,7 +2,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     convert::identity,
     mem,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     ops::DerefMut,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -14,7 +14,11 @@ use scylla2_cql::{
     error::{ConnectionError, DatabaseError, DatabaseErrorKind, ReadLoopError},
     event::{Event, EventType},
     frame::envelope::Envelope,
-    protocol::{read::read_envelope_loop, startup, write::write_envelope},
+    protocol::{
+        read::{read_envelope, read_envelope_loop},
+        startup,
+        write::write_envelope,
+    },
     request::{query::values::QueryValues, register::Register, Request, RequestExt},
     response::Response,
     ProtocolVersion,
@@ -63,7 +67,7 @@ impl From<ControlError> for ExecutionError {
 }
 
 pub(crate) struct ControlConnection {
-    address: SocketAddr,
+    rpc_address: IpAddr,
     version: ProtocolVersion,
     stream_generator: AtomicUsize,
     streams: Arc<Mutex<HashMap<i16, oneshot::Sender<io::Result<Envelope>>>>>,
@@ -72,14 +76,36 @@ pub(crate) struct ControlConnection {
     stop_tx: Mutex<Option<oneshot::Sender<io::Result<()>>>>,
 }
 
+pub(crate) enum ControlAddr {
+    Config(SocketAddr),
+    Peer(IpAddr),
+}
+
 impl ControlConnection {
     pub(crate) async fn open(
-        address: SocketAddr,
+        address: ControlAddr,
         config: &NodeConfig,
         register_for_schema_event: bool,
         database_events: mpsc::UnboundedSender<Event>,
         session_events: mpsc::UnboundedSender<SessionEvent>,
     ) -> Result<Self, ConnectionError> {
+        let address = match address {
+            ControlAddr::Peer(peer) => match config.address_translator.translate(peer).await {
+                Ok((addr, _)) => addr,
+                Err(error) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(address = %peer, error, "Address translation failed");
+                    let error_str = format!("Address translation failed: {error}");
+                    let event = SessionEvent::AddressTranslationFailed {
+                        rpc_address: peer,
+                        error: Arc::new(error),
+                    };
+                    session_events.send(event).ok();
+                    return Err(other_error(error_str).into());
+                }
+            },
+            ControlAddr::Config(addr) => addr,
+        };
         let (mut conn, version, _) = TcpConnection::open_with_minimal_version(
             address,
             None,
@@ -98,12 +124,34 @@ impl ControlConnection {
             config.authentication_protocol.as_deref(),
         )
         .await?;
+        let rpc_addr_envelope = cql_query(
+            "SELECT rpc_address FROM system.local WHERE key = 'local'",
+            (),
+        )
+        .serialize_envelope_owned(version, Default::default(), false, None, 0)
+        .map_err(other_error)?;
+        write_envelope(version, false, &rpc_addr_envelope, &mut conn).await?;
+        let rpc_addr_response = Response::deserialize(
+            version,
+            Default::default(),
+            read_envelope(version, None, &mut conn).await?,
+            None,
+        )?;
+        let rpc_address = maybe_cql_row::<(_,)>(rpc_addr_response)?
+            .map(|(ip,)| ip)
+            .ok_or_else(|| other_error("Cannot request rpc_address"))?;
+        // TODO handle "0.0.0.0" bug
+        // (see https://github.com/scylladb/scylla-rust-driver/issues/640)
+        // The issue with the official driver solution is that it prevent the already translated
+        // to be translated again (for serverless for example)
+        // I would prefer open a connection to another node and compare the peers obtained to
+        // deduce the real rpc_address
         let (reader, writer) = tokio::io::split(conn);
         let (stop_tx, stop_rx) = oneshot::channel();
         let streams: Arc<Mutex<HashMap<i16, oneshot::Sender<io::Result<Envelope>>>>> =
             Default::default();
         tokio::spawn(read_task(
-            address,
+            rpc_address,
             version,
             reader,
             database_events,
@@ -112,7 +160,7 @@ impl ControlConnection {
             stop_rx,
         ));
         let connection = Self {
-            address,
+            rpc_address,
             version,
             stream_generator: AtomicUsize::new(0),
             streams,
@@ -131,7 +179,7 @@ impl ControlConnection {
             &event_types[..2]
         };
         connection.request(Register { event_types }).await?;
-        let event = SessionEvent::ControlConnectionOpened { address };
+        let event = SessionEvent::ControlConnectionOpened { rpc_address };
         connection.session_events.send(event).ok();
         Ok(connection)
     }
@@ -191,6 +239,7 @@ impl ControlConnection {
             ),
             self.query("SELECT rpc_address, data_center, rack, tokens FROM system.peers", ()),
         )?;
+        // TODO handle "0.0.0.0" bug here too
         Ok(peers_and_local(peers, local, identity)?)
     }
 
@@ -207,7 +256,7 @@ impl ControlConnection {
             let schema_version = schema_versions.into_iter().next().unwrap();
             let event = SessionEvent::SchemaAgreement {
                 schema_version,
-                address: self.address,
+                rpc_address: self.rpc_address,
             };
             self.session_events.send(event).ok();
             Some(schema_version)
@@ -249,7 +298,7 @@ impl Drop for ControlConnection {
 }
 
 async fn read_task(
-    address: SocketAddr,
+    rpc_address: IpAddr,
     version: ProtocolVersion,
     reader: impl AsyncRead + Unpin + Send + 'static,
     events: mpsc::UnboundedSender<Event>,
@@ -289,7 +338,7 @@ async fn read_task(
                 .ok();
         }
         let event = SessionEvent::ControlConnectionClosed {
-            address,
+            rpc_address,
             error: Some(Arc::new(io::Error::new(error.kind(), error.to_string()))),
         };
         session_events.send(event).ok();

@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::IpAddr, sync::Arc};
 
 use scylla2_cql::error::BoxedError;
 use uuid::Uuid;
@@ -7,7 +7,6 @@ use crate::{
     error::ConnectionError,
     topology::{
         node::{Node, NodeStatus},
-        peer::Peer,
         Topology,
     },
 };
@@ -17,7 +16,7 @@ use crate::{
 #[strum_discriminants(derive(Hash))]
 pub enum SessionEvent {
     AddressTranslationFailed {
-        peer: Peer,
+        rpc_address: IpAddr,
         error: Arc<BoxedError>,
     },
     ConnectionOpened {
@@ -36,14 +35,14 @@ pub enum SessionEvent {
         error: Option<Arc<io::Error>>,
     },
     ControlConnectionOpened {
-        address: SocketAddr,
+        rpc_address: IpAddr,
     },
     ControlConnectionFailed {
-        address: SocketAddr,
+        rpc_address: IpAddr,
         error: Arc<ConnectionError>,
     },
     ControlConnectionClosed {
-        address: SocketAddr,
+        rpc_address: IpAddr,
         error: Option<Arc<io::Error>>,
     },
     NodeStatusUpdate {
@@ -52,7 +51,7 @@ pub enum SessionEvent {
     },
     SchemaAgreement {
         schema_version: Uuid,
-        address: SocketAddr,
+        rpc_address: IpAddr,
     },
     TopologyUpdate {
         topology: Arc<Topology>,

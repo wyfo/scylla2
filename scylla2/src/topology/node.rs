@@ -30,7 +30,7 @@ use crate::{
     statement::query::cql_query,
     topology::{
         partitioner::Token,
-        peer::{NodeDistance, Peer, ShardAwarePort},
+        peer::{AddressTranslator, NodeDistance, Peer, ShardAwarePort},
         sharding::Sharder,
     },
 };
@@ -48,6 +48,7 @@ impl Default for PoolSize {
 }
 
 pub(crate) struct NodeConfig {
+    pub(crate) address_translator: Arc<dyn AddressTranslator>,
     pub(crate) authentication_protocol: Option<Arc<dyn AuthenticationProtocol>>,
     pub(crate) buffer_size: usize,
     pub(crate) compression_min_size: usize,
@@ -103,10 +104,9 @@ pub enum NodeStatus {
 
 const REMOVED: isize = -1;
 const PEER_CHANGED: isize = -2;
-const TRANSLATED_ADDRESS_CHANGED: isize = -3;
-const DISTANCE_CHANGED: isize = -4;
-const SHARDING_CHANGED: isize = -5;
-const SESSION_CLOSED: isize = -6;
+const DISTANCE_CHANGED: isize = -3;
+const SHARDING_CHANGED: isize = -4;
+const SESSION_CLOSED: isize = -5;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum NodeDisconnectionReason {
@@ -127,8 +127,6 @@ impl From<NodeDisconnectionReason> for NodeStatus {
 #[derive(Debug)]
 pub struct Node {
     peer: Peer,
-    address: SocketAddr,
-    shard_aware_port: Option<ShardAwarePort>,
     distance: NodeDistance,
     active_connection_count: AtomicIsize, // negative means disconnected
     connection_pool: OnceCell<ConnectionPool>,
@@ -139,11 +137,8 @@ pub struct Node {
 }
 
 impl Node {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         peer: Peer,
-        address: SocketAddr,
-        shard_aware_port: Option<ShardAwarePort>,
         distance: NodeDistance,
         config: Option<Arc<NodeConfig>>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
@@ -153,8 +148,6 @@ impl Node {
         let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let node = Arc::new(Self {
             peer,
-            address,
-            shard_aware_port,
             distance,
             active_connection_count: AtomicIsize::new(0),
             connection_pool: OnceCell::new(),
@@ -169,14 +162,6 @@ impl Node {
             tokio::spawn(worker);
         }
         node
-    }
-
-    pub fn address(&self) -> SocketAddr {
-        self.address
-    }
-
-    pub fn shard_aware_port(&self) -> Option<ShardAwarePort> {
-        self.shard_aware_port
     }
 
     pub fn peer(&self) -> &Peer {
@@ -201,7 +186,6 @@ impl Node {
             0 => NodeStatus::Down,
             REMOVED => NodeDisconnectionReason::Removed.into(),
             PEER_CHANGED => NodeDisconnectionReason::PeerChanged.into(),
-            TRANSLATED_ADDRESS_CHANGED => NodeDisconnectionReason::TranslatedAddressChanged.into(),
             DISTANCE_CHANGED => NodeDisconnectionReason::DistanceChanged.into(),
             SHARDING_CHANGED => NodeDisconnectionReason::ShardingChanged.into(),
             SESSION_CLOSED => NodeDisconnectionReason::SessionClosed.into(),
@@ -282,7 +266,7 @@ impl Node {
             let schema_version = schema_versions.into_iter().next().unwrap();
             let event = SessionEvent::SchemaAgreement {
                 schema_version,
-                address: self.address,
+                rpc_address: self.peer.rpc_address,
             };
             self.session_events.send(event).ok();
             Some(schema_version)

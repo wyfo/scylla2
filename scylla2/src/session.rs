@@ -29,7 +29,7 @@ use crate::{
     execution::ExecutionResult,
     session::{
         config::{NodeAddress, SessionConfig},
-        control::ControlConnection,
+        control::{ControlAddr, ControlConnection},
         event::{SessionEvent, SessionEventType},
         worker::{
             database_event_worker, heartbeat_worker, refresh_topology_worker, session_event_worker,
@@ -109,6 +109,7 @@ impl Session {
         let remote_heartbeat_interval = config.connection_remote.heartbeat_interval;
         let node_config = |conn_cfg: ConnectionConfig| {
             Arc::new(NodeConfig {
+                address_translator: config.address_translator.clone(),
                 authentication_protocol: authentication_protocol.clone(),
                 buffer_size: conn_cfg.buffer_size,
                 compression_min_size: config.compression_minimal_size,
@@ -140,7 +141,7 @@ impl Session {
                 },
             };
             control_conn = ControlConnection::open(
-                addr,
+                ControlAddr::Config(addr),
                 &node_config_local,
                 config.register_for_schema_event,
                 database_events_internal_tx.clone(),
@@ -233,7 +234,7 @@ impl Session {
                     .map(|node| (node, &self.0.node_config_remote)),
             ) {
                 match ControlConnection::open(
-                    node.address(),
+                    ControlAddr::Peer(node.peer().rpc_address),
                     node_config,
                     self.0.register_for_schema_event,
                     self.0.database_event_internal.clone(),
@@ -247,7 +248,7 @@ impl Session {
                     }
                     Err(error) => {
                         let event = SessionEvent::ControlConnectionFailed {
-                            address: node.address(),
+                            rpc_address: node.peer().rpc_address,
                             error: Arc::new(error),
                         };
                         self.0.session_events_internal.send(event).ok();
@@ -548,22 +549,7 @@ impl Session {
     }
 
     async fn topology_node(&self, topology: &Topology, peer: Peer) -> Option<(Arc<Node>, bool)> {
-        let (address, shard_aware_port) = match self.0.address_translator.translate(&peer).await {
-            Ok(translated) => translated,
-            Err(error) => {
-                #[cfg(feature = "tracing")]
-                tracing::warn!(?peer, error, "Address translation failed, node is ignored");
-                self.0
-                    .session_events
-                    .send(SessionEvent::AddressTranslationFailed {
-                        peer: peer.clone(),
-                        error: Arc::new(error),
-                    })
-                    .ok();
-                return None;
-            }
-        };
-        let distance = self.0.node_localizer.distance(&peer, address).await;
+        let distance = self.0.node_localizer.distance(&peer).await;
         if let Some(node) = topology.nodes_by_rpc_address().get(&peer.rpc_address) {
             if node.peer() != &peer {
                 #[cfg(feature = "tracing")]
@@ -575,15 +561,6 @@ impl Session {
                     "Node peer has changed"
                 );
                 node.disconnect(NodeDisconnectionReason::PeerChanged);
-            } else if node.address() != address || node.shard_aware_port() != shard_aware_port {
-                #[cfg(feature = "tracing")]
-                tracing::info!(
-                    rpc_address = ?peer.rpc_address,
-                    ?address,
-                    ?shard_aware_port,
-                    "Node translated address has changed"
-                );
-                node.disconnect(NodeDisconnectionReason::TranslatedAddressChanged);
             } else if node.distance() != distance {
                 #[cfg(feature = "tracing")]
                 tracing::info!(
@@ -603,8 +580,6 @@ impl Session {
         };
         let node = Node::new(
             peer,
-            address,
-            shard_aware_port,
             distance,
             node_config,
             self.0.keyspace_used.clone(),

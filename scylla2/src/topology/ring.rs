@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::{Hash, Hasher},
-    net::SocketAddr,
+    net::IpAddr,
     ops::Range,
     sync::Arc,
 };
@@ -88,7 +88,7 @@ struct HashableNode<'a>(&'a Arc<Node>);
 
 impl PartialEq for HashableNode<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.0.address().eq(&other.0.address())
+        self.0.peer().rpc_address.eq(&other.0.peer().rpc_address)
     }
 }
 
@@ -96,19 +96,22 @@ impl Eq for HashableNode<'_> {}
 
 impl PartialOrd for HashableNode<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.address().partial_cmp(&other.0.address())
+        self.0
+            .peer()
+            .rpc_address
+            .partial_cmp(&other.0.peer().rpc_address)
     }
 }
 
 impl Ord for HashableNode<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.address().cmp(&other.0.address())
+        self.0.peer().rpc_address.cmp(&other.0.peer().rpc_address)
     }
 }
 
 impl Hash for HashableNode<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.address().hash(state)
+        self.0.peer().rpc_address.hash(state)
     }
 }
 
@@ -205,7 +208,7 @@ impl Ring {
             let range_by_distance =
                 |dist,
                  combinations: &mut Vec<Arc<Node>>,
-                 ranges: &mut HashMap<Vec<SocketAddr>, Range<u16>>| {
+                 ranges: &mut HashMap<Vec<IpAddr>, Range<u16>>| {
                     let combinations_len = combinations.len();
                     combinations.extend(
                         nodes
@@ -215,7 +218,7 @@ impl Ring {
                     );
                     let addrs: Vec<_> = combinations[combinations_len..]
                         .iter()
-                        .map(|n| n.address())
+                        .map(|n| n.peer().rpc_address)
                         .collect();
                     if addrs.is_empty() {
                         return 0..0;

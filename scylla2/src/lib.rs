@@ -36,7 +36,7 @@ mod test {
             .unwrap();
         println!("connected");
         for node in session.topology().nodes() {
-            println!("{}", node.address());
+            println!("{:?}", node.peer());
         }
         println!("{:?}", session.execute("", ()).await);
     }
