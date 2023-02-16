@@ -4,8 +4,6 @@ This is a POC (with more than 12kloc, maybe not a POC anymore) of a new implemen
 
 I've started the development at the end of October 2022, mostly on my spare times, so the development is quite messy (I often work during night when kids sleep), and there are still some things to do (hopefully, mostly tests at this time).
 
-Actually, I didn't have the time to finish it completely for the Scylla Summit for which I have made this repository public. The connection pool implementation is incomplete, so it's not currently usable (the driver can still connect and send request to the database using the control connection). I hope I will be able to finish it tonight.
-
 ## Why did I write a new driver from scratch instead of contributing to the existing one?
 
 Actually, I'm already a contributor, you may especially check https://github.com/scylladb/scylla-rust-driver/issues/571.
@@ -33,8 +31,6 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 
 ## TODO
 
-- Finish connection pool implementation
-- Support serverless (I've just learned about it during Scylla Summit ^^'), see https://github.com/scylladb/scylla-rust-driver/issues/640
 - Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
 - Execution metadata (token, node, failed attempts, etc.) are not available for the moment
 - tracing
@@ -42,6 +38,7 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - test, tests, and more tests
 - benchmark
 - prepare for tablet partitioning?
+- ...
 
 ## Performance
 
