@@ -4,6 +4,7 @@ use scylla2_cql::{
     error::{DatabaseError, InvalidRequest, TypeError},
     event::SchemaChangeEvent,
 };
+use tokio::time::error::Elapsed;
 #[rustfmt::skip]
 pub use scylla2_cql::error::ConnectionError;
 use scylla2_cql::error::DatabaseErrorKind;
@@ -81,6 +82,12 @@ impl ExecutionError {
             Self::Database(error) => Ok(&error.kind),
             other => Err(other),
         }
+    }
+}
+
+impl From<Elapsed> for ExecutionError {
+    fn from(value: Elapsed) -> Self {
+        Self::Io(value.into())
     }
 }
 
