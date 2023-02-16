@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    num::NonZeroU16,
+    num::NonZeroUsize,
     str::FromStr,
     sync::{
         atomic::{AtomicIsize, AtomicUsize, Ordering},
@@ -42,8 +42,8 @@ mod worker;
 
 #[derive(Debug, Copy, Clone)]
 pub enum PoolSize {
-    PerHost(NonZeroU16),
-    PerShard(NonZeroU16),
+    PerHost(NonZeroUsize),
+    PerShard(NonZeroUsize),
 }
 
 impl Default for PoolSize {
@@ -93,7 +93,9 @@ impl ConnectionPool {
     ) -> Self {
         let connection_count = match (pool_size, &sharder) {
             (PoolSize::PerHost(count), _) | (PoolSize::PerShard(count), None) => count.get(),
-            (PoolSize::PerShard(count), Some(sharder)) => count.get() * sharder.nr_shards().get(),
+            (PoolSize::PerShard(count), Some(sharder)) => {
+                count.get() * sharder.nr_shards().get() as usize
+            }
         };
         let connections = (0..connection_count)
             .map(|_| {
