@@ -317,9 +317,13 @@ impl Session {
             .chain(&remote_nodes[..remote])
         {
             match node.get_sharded_connections(token) {
-                // TODO handle multiple connections
                 Some(conns) => {
-                    let connection = &conns[0];
+                    let index = if conns.len() == 1 {
+                        0
+                    } else {
+                        node.round_robin().fetch_add(1, Ordering::Relaxed) % conns.len()
+                    };
+                    let connection = &conns[index];
                     match connection
                         .execute(&request, config.tracing.unwrap_or(false), None)
                         .await
