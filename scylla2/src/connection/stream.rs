@@ -231,7 +231,7 @@ impl StreamPool {
         if stream < 32 {
             return (&self.map, stream as usize);
         }
-        let map_index = 15 - (stream >> 5).leading_zeros() as usize;
+        let map_index = 10 - stream.leading_zeros() as usize;
         let map = self.lazy_maps[map_index].get().unwrap();
         (map, stream as usize - (1 << (map_index + 5)))
     }
