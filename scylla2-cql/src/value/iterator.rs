@@ -22,12 +22,12 @@ use crate::{
     },
 };
 
-pub trait CollectionValueWrite {
+pub trait WriteCollectionValue {
     fn col_serialized_size(&self) -> Result<usize, ValueTooBig>;
     fn serialize_col(&self, buf: &mut &mut [u8]);
 }
 
-pub trait CollectionValueRead<'a> {
+pub trait ReadCollectionValue<'a> {
     type Unpacked;
     fn check_type(cql_type: &CqlType) -> Result<(), TypeError>;
     fn read_col_value(
@@ -36,7 +36,7 @@ pub trait CollectionValueRead<'a> {
     ) -> Result<Self::Unpacked, ParseError>;
 }
 
-impl<T> CollectionValueWrite for (T,)
+impl<T> WriteCollectionValue for (T,)
 where
     T: WriteValue,
 {
@@ -49,7 +49,7 @@ where
     }
 }
 
-impl<'a, T> CollectionValueRead<'a> for (T,)
+impl<'a, T> ReadCollectionValue<'a> for (T,)
 where
     T: ReadValue<'a>,
 {
@@ -71,7 +71,7 @@ where
     }
 }
 
-impl<K, V> CollectionValueWrite for (K, V)
+impl<K, V> WriteCollectionValue for (K, V)
 where
     K: WriteValue,
     V: WriteValue,
@@ -86,7 +86,7 @@ where
     }
 }
 
-impl<'a, K, V> CollectionValueRead<'a> for (K, V)
+impl<'a, K, V> ReadCollectionValue<'a> for (K, V)
 where
     K: ReadValue<'a>,
     V: ReadValue<'a>,
@@ -116,15 +116,15 @@ where
 }
 
 #[derive(Debug)]
-pub struct ValueWriteIter<I> {
+pub struct WriteValueIter<I> {
     pub iter: I,
     pub size: usize,
 }
 
-impl<I> WriteValue for ValueWriteIter<I>
+impl<I> WriteValue for WriteValueIter<I>
 where
     I: Iterator + Clone,
-    I::Item: CollectionValueWrite,
+    I::Item: WriteCollectionValue,
 {
     fn value_size(&self) -> Result<usize, ValueTooBig> {
         let size = (self.size as i32).cql_size()?;
@@ -140,16 +140,16 @@ where
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct ValueReadIter<'a, T> {
+pub struct ReadValueIter<'a, T> {
     envelope: &'a Bytes,
     buf: &'a [u8],
     remain: usize,
     _phantom: PhantomData<T>,
 }
 
-impl<'a, T> ReadValue<'a> for ValueReadIter<'a, T>
+impl<'a, T> ReadValue<'a> for ReadValueIter<'a, T>
 where
-    T: CollectionValueRead<'a>,
+    T: ReadCollectionValue<'a>,
 {
     fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
         T::check_type(cql_type)
@@ -158,7 +158,7 @@ where
     fn read_value(mut slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
         let buf = &mut slice;
         let length = i32::read_cql(buf)?;
-        Ok(ValueReadIter {
+        Ok(ReadValueIter {
             envelope,
             remain: length.try_into().map_err(invalid_data)?,
             buf,
@@ -167,9 +167,9 @@ where
     }
 }
 
-impl<'a, T> Iterator for ValueReadIter<'a, T>
+impl<'a, T> Iterator for ReadValueIter<'a, T>
 where
-    T: CollectionValueRead<'a>,
+    T: ReadCollectionValue<'a>,
 {
     type Item = Result<T::Unpacked, ParseError>;
 
@@ -188,16 +188,16 @@ where
 
 pub trait AsCollectionValue: Copy {
     type Unpacked;
-    type Value: CollectionValueWrite;
+    type Value: WriteCollectionValue;
     fn from_unpacked(unpacked: Self::Unpacked) -> Self;
     fn as_col_value(self) -> Self::Value;
 }
 
 pub trait FromCollectionValue<'a>: Sized {
     type Unpacked;
-    type Value: CollectionValueRead<'a>;
+    type Value: ReadCollectionValue<'a>;
     fn from_col_value(
-        value: <Self::Value as CollectionValueRead<'a>>::Unpacked,
+        value: <Self::Value as ReadCollectionValue<'a>>::Unpacked,
     ) -> Result<Self::Unpacked, BoxedError>;
 }
 
@@ -225,7 +225,7 @@ where
     type Value = (T::Value,);
 
     fn from_col_value(
-        value: <Self::Value as CollectionValueRead<'a>>::Unpacked,
+        value: <Self::Value as ReadCollectionValue<'a>>::Unpacked,
     ) -> Result<Self::Unpacked, BoxedError> {
         T::from_value(value)
     }
@@ -257,7 +257,7 @@ where
     type Value = (K::Value, V::Value);
 
     fn from_col_value(
-        value: <Self::Value as CollectionValueRead<'a>>::Unpacked,
+        value: <Self::Value as ReadCollectionValue<'a>>::Unpacked,
     ) -> Result<Self::Unpacked, BoxedError> {
         Ok((K::from_value(value.0)?, V::from_value(value.1)?))
     }
@@ -290,13 +290,13 @@ where
     I::Item: AsCollectionValue,
 {
     type Value<'a> =
-        ValueWriteIter<std::iter::Map<I, fn(I::Item) -> <I::Item as AsCollectionValue>::Value>> where I: 'a;
+        WriteValueIter<std::iter::Map<I, fn(I::Item) -> <I::Item as AsCollectionValue>::Value>> where I: 'a;
 
     fn as_value(&self) -> Self::Value<'_> {
         for item in self.iter.clone() {
             item.as_col_value();
         }
-        ValueWriteIter {
+        WriteValueIter {
             iter: self.iter.clone().map(I::Item::as_col_value),
             size: self.size,
         }
@@ -304,7 +304,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct FromValueIter<'a, T>(ValueReadIter<'a, T::Value>)
+pub struct FromValueIter<'a, T>(ReadValueIter<'a, T::Value>)
 where
     T: FromCollectionValue<'a>;
 
@@ -312,7 +312,7 @@ impl<'a, T> FromValue<'a> for FromValueIter<'a, T>
 where
     T: FromCollectionValue<'a>,
 {
-    type Value = ValueReadIter<'a, T::Value>;
+    type Value = ReadValueIter<'a, T::Value>;
 
     fn from_value(value: Self::Value) -> Result<Self, BoxedError> {
         Ok(FromValueIter(value))

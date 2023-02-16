@@ -10,8 +10,6 @@ use crate::{
 };
 
 pub mod column_spec;
-#[cfg(feature = "cql_value")]
-pub mod cql_value;
 pub mod lwt;
 pub mod prepared;
 pub mod rows;

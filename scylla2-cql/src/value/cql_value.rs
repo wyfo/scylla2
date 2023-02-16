@@ -8,10 +8,10 @@ use uuid::Uuid;
 use crate::{
     cql::ReadCql,
     cql_type::CqlType,
-    error::{ParseError, TypeError},
+    error::{ParseError, TypeError, ValueTooBig},
     response::result::{column_spec::ColumnSpec, rows::RowParser},
     utils::invalid_data,
-    value::ReadValue,
+    value::{iterator::WriteValueIter, ReadValue, WriteValue, WriteValueExt},
 };
 
 const NULL_VALUE_IN_COLLECTION: &str = "Null value in collection";
@@ -94,7 +94,7 @@ impl CqlValue {
             CqlType::Time => CqlValue::Time(i64::read_value(slice, fake_envelope)?),
             CqlType::Timeuuid => CqlValue::Timeuuid(Uuid::read_value(slice, fake_envelope)?),
             CqlType::Timestamp => CqlValue::Timestamp(i64::read_value(slice, fake_envelope)?),
-            CqlType::Tuple(types) => CqlValue::Tuple(Self::parse_tuple_types(types, slice)?),
+            CqlType::Tuple(types) => CqlValue::Tuple(Self::parse_tuple_values(types, slice)?),
             CqlType::Udt {
                 keyspace,
                 type_name,
@@ -141,7 +141,7 @@ impl CqlValue {
         }
         Ok(vec)
     }
-    fn parse_tuple_types(
+    fn parse_tuple_values(
         types: &[CqlType],
         mut slice: &[u8],
     ) -> Result<Vec<Option<CqlValue>>, ParseError> {
@@ -178,5 +178,93 @@ impl<'a> RowParser<'a> for Vec<Option<CqlValue>> {
             vec.push(CqlValue::parse(&col_spec.r#type, bytes)?);
         }
         Ok(vec)
+    }
+}
+
+impl WriteValue for CqlValue {
+    fn value_size(&self) -> Result<usize, ValueTooBig> {
+        match self {
+            CqlValue::Ascii(s) => s.as_str().value_size(),
+            CqlValue::BigInt(i) => i.value_size(),
+            CqlValue::Blob(b) => b.as_slice().value_size(),
+            CqlValue::Boolean(b) => b.value_size(),
+            CqlValue::Counter(c) => c.value_size(),
+            CqlValue::Decimal(d) => d.value_size(),
+            CqlValue::Date(d) => d.value_size(),
+            CqlValue::Double(d) => d.value_size(),
+            CqlValue::Float(f) => f.value_size(),
+            CqlValue::Int(i) => i.value_size(),
+            CqlValue::Inet(ip) => ip.value_size(),
+            CqlValue::List(list) => WriteValueIter {
+                iter: list.iter().map(|v| (v,)),
+                size: list.len(),
+            }
+            .value_size(),
+            CqlValue::Map(map) => WriteValueIter {
+                iter: map.iter().map(|(k, v)| (k, v)),
+                size: map.len(),
+            }
+            .value_size(),
+            CqlValue::Set(set) => WriteValueIter {
+                iter: set.iter().map(|v| (v,)),
+                size: set.len(),
+            }
+            .value_size(),
+            CqlValue::SmallInt(i) => i.value_size(),
+            CqlValue::Text(s) => s.as_str().value_size(),
+            CqlValue::TinyInt(i) => i.value_size(),
+            CqlValue::Time(t) => t.value_size(),
+            CqlValue::Timestamp(t) => t.value_size(),
+            CqlValue::Timeuuid(uuid) => uuid.value_size(),
+            CqlValue::Tuple(tuple) => tuple.iter().map(|v| v.value_size_with_size()).sum(),
+            CqlValue::Udt { fields, .. } => {
+                fields.iter().map(|(_, v)| v.value_size_with_size()).sum()
+            }
+            CqlValue::Uuid(uuid) => uuid.value_size(),
+            CqlValue::Varint(i) => i.value_size(),
+        }
+    }
+
+    fn write_value(&self, buf: &mut &mut [u8]) {
+        match self {
+            CqlValue::Ascii(s) => s.as_str().write_value(buf),
+            CqlValue::BigInt(i) => i.write_value(buf),
+            CqlValue::Blob(b) => b.as_slice().write_value(buf),
+            CqlValue::Boolean(b) => b.write_value(buf),
+            CqlValue::Counter(c) => c.write_value(buf),
+            CqlValue::Decimal(d) => d.write_value(buf),
+            CqlValue::Date(d) => d.write_value(buf),
+            CqlValue::Double(d) => d.write_value(buf),
+            CqlValue::Float(f) => f.write_value(buf),
+            CqlValue::Int(i) => i.write_value(buf),
+            CqlValue::Inet(ip) => ip.write_value(buf),
+            CqlValue::List(list) => WriteValueIter {
+                iter: list.iter().map(|v| (v,)),
+                size: list.len(),
+            }
+            .write_value(buf),
+            CqlValue::Map(map) => WriteValueIter {
+                iter: map.iter().map(|(k, v)| (k, v)),
+                size: map.len(),
+            }
+            .write_value(buf),
+            CqlValue::Set(set) => WriteValueIter {
+                iter: set.iter().map(|v| (v,)),
+                size: set.len(),
+            }
+            .write_value(buf),
+            CqlValue::SmallInt(i) => i.write_value(buf),
+            CqlValue::Text(s) => s.as_str().write_value(buf),
+            CqlValue::TinyInt(i) => i.write_value(buf),
+            CqlValue::Time(t) => t.write_value(buf),
+            CqlValue::Timestamp(t) => t.write_value(buf),
+            CqlValue::Timeuuid(uuid) => uuid.write_value(buf),
+            CqlValue::Tuple(tuple) => tuple.iter().for_each(|v| v.write_value_with_size(buf)),
+            CqlValue::Udt { fields, .. } => fields
+                .iter()
+                .for_each(|(_, v)| v.write_value_with_size(buf)),
+            CqlValue::Uuid(uuid) => uuid.write_value(buf),
+            CqlValue::Varint(i) => i.write_value(buf),
+        }
     }
 }
