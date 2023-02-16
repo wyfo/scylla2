@@ -1,8 +1,13 @@
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    io,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use scylla2_cql::{error::BoxedError, response::result::rows::FromRow};
+use tokio::sync::mpsc;
 
-use crate::topology::partitioner::Token;
+use crate::{topology::partitioner::Token, utils::other_error, SessionEvent};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -29,8 +34,8 @@ impl FromRow<'_> for Peer {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ShardAwarePort {
-    NoShardAwarePort,
-    ShardAwarePort(u16),
+    NoPort,
+    Port(u16),
 }
 
 // Is there an interest for AddressTranslator to take &Peer instead of IpAddr?
@@ -55,6 +60,32 @@ where
         self(address)
     }
 }
+
+#[async_trait::async_trait]
+pub(crate) trait AddressTranslatorExt: AddressTranslator {
+    async fn translate_or_warn(
+        &self,
+        address: IpAddr,
+        session_events: &mpsc::UnboundedSender<SessionEvent>,
+    ) -> io::Result<(SocketAddr, Option<ShardAwarePort>)> {
+        match self.translate(address).await {
+            Ok(ok) => Ok(ok),
+            Err(error) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(%address, error, "Address translation failed");
+                let error_str = format!("Address translation failed: {error}");
+                let event = SessionEvent::AddressTranslationFailed {
+                    rpc_address: address,
+                    error: Arc::new(error),
+                };
+                session_events.send(event).ok();
+                Err(other_error(error_str))
+            }
+        }
+    }
+}
+
+impl<T> AddressTranslatorExt for T where T: ?Sized + AddressTranslator {}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, strum::Display)]
 pub enum NodeDistance {

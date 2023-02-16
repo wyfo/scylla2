@@ -2,7 +2,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     convert::identity,
     mem,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     ops::DerefMut,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -14,11 +14,7 @@ use scylla2_cql::{
     error::{ConnectionError, DatabaseError, DatabaseErrorKind, ReadLoopError},
     event::{Event, EventType},
     frame::envelope::Envelope,
-    protocol::{
-        read::{read_envelope, read_envelope_loop},
-        startup,
-        write::write_envelope,
-    },
+    protocol::{execute, read::read_envelope_loop, startup, write::write_envelope},
     request::{query::values::QueryValues, register::Register, Request, RequestExt},
     response::Response,
     ProtocolVersion,
@@ -35,7 +31,10 @@ use crate::{
     error::ExecutionError,
     execution::{maybe_cql_row, peers_and_local},
     statement::query::cql_query,
-    topology::{node::NodeConfig, peer::Peer},
+    topology::{
+        node::NodeConfig,
+        peer::{AddressTranslatorExt, Peer},
+    },
     utils::other_error,
     SessionEvent,
 };
@@ -90,20 +89,13 @@ impl ControlConnection {
         session_events: mpsc::UnboundedSender<SessionEvent>,
     ) -> Result<Self, ConnectionError> {
         let address = match address {
-            ControlAddr::Peer(peer) => match config.address_translator.translate(peer).await {
-                Ok((addr, _)) => addr,
-                Err(error) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(address = %peer, error, "Address translation failed");
-                    let error_str = format!("Address translation failed: {error}");
-                    let event = SessionEvent::AddressTranslationFailed {
-                        rpc_address: peer,
-                        error: Arc::new(error),
-                    };
-                    session_events.send(event).ok();
-                    return Err(other_error(error_str).into());
-                }
-            },
+            ControlAddr::Peer(peer) => {
+                config
+                    .address_translator
+                    .translate_or_warn(peer, &session_events)
+                    .await?
+                    .0
+            }
             ControlAddr::Config(addr) => addr,
         };
         let (mut conn, version, _) = TcpConnection::open_with_minimal_version(
@@ -124,19 +116,16 @@ impl ControlConnection {
             config.authentication_protocol.as_deref(),
         )
         .await?;
-        let rpc_addr_envelope = cql_query(
-            "SELECT rpc_address FROM system.local WHERE key = 'local'",
-            (),
-        )
-        .serialize_envelope_owned(version, Default::default(), false, None, 0)
-        .map_err(other_error)?;
-        write_envelope(version, false, &rpc_addr_envelope, &mut conn).await?;
-        let rpc_addr_response = Response::deserialize(
+        let rpc_addr_response = execute(
+            &mut conn,
             version,
             Default::default(),
-            read_envelope(version, None, &mut conn).await?,
-            None,
-        )?;
+            cql_query(
+                "SELECT rpc_address FROM system.local WHERE key = 'local'",
+                (),
+            ),
+        )
+        .await?;
         let rpc_address = maybe_cql_row::<(_,)>(rpc_addr_response)?
             .map(|(ip,)| ip)
             .ok_or_else(|| other_error("Cannot request rpc_address"))?;

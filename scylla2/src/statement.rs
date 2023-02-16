@@ -1,13 +1,7 @@
 use std::sync::Arc;
 
 use config::{StatementConfig, StatementOptions};
-use scylla2_cql::{
-    request::{
-        query::{parameters::QueryParameters as CqlQueryParameters, values::QueryValues},
-        Request,
-    },
-    response::result::column_spec::ColumnSpec,
-};
+use scylla2_cql::{request::Request, response::result::column_spec::ColumnSpec};
 
 use crate::{error::PartitionKeyError, topology::ring::Partition};
 

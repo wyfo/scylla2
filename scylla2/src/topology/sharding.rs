@@ -1,5 +1,4 @@
 use std::{
-    net::{IpAddr, SocketAddr},
     num::NonZeroU16,
     sync::atomic::{AtomicU16, Ordering},
 };
@@ -58,7 +57,7 @@ impl Sharder {
                 .get::<String>("SCYLLA_SHARDING_ALGORITHM")?
                 .as_str()
             {
-                "BIASED_TOKEN_ROUND_ROBIN" => ShardingAlgorithm::BiasedTokenRoundRobin {
+                "biased-token-round-robin" => ShardingAlgorithm::BiasedTokenRoundRobin {
                     ignore_msb: supported.get("SCYLLA_SHARDING_IGNORE_MSB")?,
                 },
                 _ => return None,

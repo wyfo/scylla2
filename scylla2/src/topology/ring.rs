@@ -61,12 +61,17 @@ struct PartitionOffsets {
 
 #[derive(Debug)]
 pub struct Ring {
+    token_map: BTreeMap<Token, Vec<Arc<Node>>>,
     partitions: BTreeMap<Token, PartitionOffsets>,
-    local_combinations: Box<[Arc<Node>]>,
-    remote_combinations: Box<[Arc<Node>]>,
+    local_combinations: Vec<Arc<Node>>,
+    remote_combinations: Vec<Arc<Node>>,
 }
 
 impl Ring {
+    pub fn token_map(&self) -> &BTreeMap<Token, Vec<Arc<Node>>> {
+        &self.token_map
+    }
+
     pub fn get_partition(self: Arc<Self>, token: Token) -> Partition {
         let offsets = self
             .partitions
@@ -199,6 +204,7 @@ impl Ring {
                 }
             }
         }
+        let mut token_map = BTreeMap::new();
         let mut partitions = BTreeMap::new();
         let mut local_combinations = Vec::new();
         let mut remote_combinations = Vec::new();
@@ -240,7 +246,9 @@ impl Ring {
                 &mut remote_combinations,
                 &mut remote_ranges,
             );
+            let nodes: Vec<_> = nodes.into_iter().map(|n| n.0.clone()).collect();
             for token in tokens {
+                token_map.insert(token, nodes.clone());
                 partitions.insert(
                     token,
                     PartitionOffsets {
@@ -251,9 +259,10 @@ impl Ring {
             }
         }
         Ring {
+            token_map,
             partitions,
-            local_combinations: local_combinations.into(),
-            remote_combinations: remote_combinations.into(),
+            local_combinations,
+            remote_combinations,
         }
     }
 }

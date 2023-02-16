@@ -1,14 +1,7 @@
 use std::{
-    collections::HashMap,
-    convert::identity,
-    io, mem,
-    ops::Deref,
-    sync::{mpsc, Arc},
-    time::Duration,
+    collections::HashMap, convert::identity, fmt, io, mem, ops::Deref, sync::Arc, time::Duration,
 };
-use std::fs::read;
 
-use futures::FutureExt;
 use scylla2_cql::{
     error::{FrameTooBig, InvalidRequest, ReadLoopError},
     extensions::ProtocolExtensions,
@@ -40,7 +33,6 @@ mod stream;
 pub(crate) mod tcp;
 mod write;
 
-#[derive(Debug)]
 pub struct Connection {
     version: ProtocolVersion,
     extensions: ProtocolExtensions,
@@ -51,10 +43,45 @@ pub struct Connection {
     stream_pool: StreamPool,
 }
 
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Connection")
+            .field("version", &self.version)
+            .field("extensions", &self.extensions)
+            .field("compression", &self.compression)
+            .field("closed", &self.is_closed())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OwnedConnection {
     node: Arc<Node>,
     index: usize,
+}
+
+impl Deref for OwnedConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.node.connections().unwrap()[self.index]
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ConnectionRef {
+    node: Arc<Node>,
+    index: usize,
+}
+
+impl ConnectionRef {
+    pub(crate) fn new(node: Arc<Node>, index: usize) -> Self {
+        Self { node, index }
+    }
+
+    pub(crate) fn get(&self) -> &Connection {
+        &self.node.connections().unwrap()[self.index]
+    }
 }
 
 impl Connection {
@@ -190,7 +217,7 @@ impl Connection {
 
     pub(crate) async fn task(
         &self,
-        get_self: impl (Fn() -> &'static Self) + Clone + Send + Sync + 'static,
+        conn_ref: ConnectionRef,
         connection: TcpConnection,
         orphan_count_threshold_delay: Duration,
         stop: oneshot::Receiver<()>,
@@ -198,13 +225,14 @@ impl Connection {
         self.slice_queue.reopen();
         self.vectored_queue.reopen();
         let (reader, writer) = tokio::io::split(connection);
-        let write_self = get_self.clone();
-        let write_task = tokio::spawn(async move { write_self().write_task(writer).await });
-        let read_self = get_self.clone();
-        let read_task = tokio::spawn(async move { read_self().read_task(reader, stop).await });
-        let orphan_self = get_self.clone();
+        let write_ref = conn_ref.clone();
+        let write_task = tokio::spawn(async move { write_ref.get().write_task(writer).await });
+        let read_ref = conn_ref.clone();
+        let read_task = tokio::spawn(async move { read_ref.get().read_task(reader, stop).await });
+        let orphan_ref = conn_ref.clone();
         let orphan_task = tokio::spawn(async move {
-            orphan_self()
+            orphan_ref
+                .get()
                 .orphan_task(orphan_count_threshold_delay)
                 .await
         });
@@ -249,6 +277,8 @@ impl Connection {
         self.close();
     }
 
+    // TODO use it in writer_task
+    #[allow(dead_code)]
     fn mark_streams_as_closed(&self, mut envelopes: &[u8]) {
         while !envelopes.is_empty() {
             let (header, remain) = envelopes.split_at(ENVELOPE_HEADER_SIZE);
@@ -261,19 +291,5 @@ impl Connection {
                 .ok();
             envelopes = &remain[header.length as usize..];
         }
-    }
-}
-
-impl OwnedConnection {
-    pub(crate) fn new(node: Arc<Node>, index: usize) -> Self {
-        Self { node, index }
-    }
-}
-
-impl Deref for OwnedConnection {
-    type Target = Connection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.node.connections().unwrap()[self.index]
     }
 }

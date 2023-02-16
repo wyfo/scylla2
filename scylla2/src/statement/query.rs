@@ -68,7 +68,7 @@ pub struct Query<S = String> {
 }
 
 impl<S> Query<S> {
-    fn new(statement: S) -> Self {
+    pub fn new(statement: S) -> Self {
         Self {
             statement,
             config: Default::default(),

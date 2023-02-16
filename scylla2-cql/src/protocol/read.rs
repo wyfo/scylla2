@@ -16,7 +16,8 @@ use crate::{
     ProtocolVersion,
 };
 
-pub async fn read_envelope_v4(
+#[inline]
+async fn read_envelope_v4(
     mut reader: impl AsyncRead + Unpin,
     crc: Option<&mut Crc32Hasher>,
 ) -> io::Result<Envelope> {

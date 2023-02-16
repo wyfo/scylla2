@@ -6,7 +6,6 @@ use scylla2_cql::{
         UncompressedFrameHeader, FRAME_COMPRESSED_HEADER_SIZE, FRAME_MAX_LENGTH,
         FRAME_TRAILER_SIZE, FRAME_UNCOMPRESSED_HEADER_SIZE,
     },
-    request::Request,
     ProtocolVersion,
 };
 use swap_buffer_queue::{write::BytesSlice, write_vectored::VectoredSlice};
@@ -62,7 +61,7 @@ impl Connection {
                     slice.header()[offset..].copy_from_slice(&header.serialize());
                     offset
                 };
-                let crc = crc32(&slice);
+                let crc = crc32(slice);
                 slice.trailer().copy_from_slice(&crc);
                 writer.write_all(&slice.frame()[offset..]).await
             }
@@ -169,7 +168,7 @@ impl Connection {
         };
         let mut hasher = Crc32Hasher::new();
         for bytes in slice.iter() {
-            hasher.write(&bytes);
+            hasher.write(bytes);
         }
         let crc = hasher.finish();
         let mut frame = slice.frame(

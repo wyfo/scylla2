@@ -2,6 +2,7 @@ use std::{
     future,
     future::poll_fn,
     io, iter, mem,
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicIsize, AtomicU32, Ordering},
@@ -98,8 +99,9 @@ impl Stream<'_> {
         self.value
     }
 
-    pub(super) async fn wait_response(&self) -> Result<Envelope, ConnectionExecutionError> {
-        future::poll_fn(|cx| self.node.poll(cx)).await
+    pub(super) async fn wait_response(self) -> Result<Envelope, ConnectionExecutionError> {
+        let stream = ManuallyDrop::new(self);
+        future::poll_fn(|cx| stream.node.poll(cx)).await
     }
 }
 
@@ -122,7 +124,7 @@ struct StreamMap {
 
 impl StreamMap {
     fn new(size: usize) -> Self {
-        assert!(size.is_power_of_two() && 1 << 5 <= size && size <= 1 << 14);
+        assert!(size.is_power_of_two() && (1 << 5..=1 << 14).contains(&size));
         Self {
             bitmap: (0..size / 32).map(|_| AtomicU32::new(0)).collect(),
             streams: (0..size).map(|_| StreamNode::default()).collect(),

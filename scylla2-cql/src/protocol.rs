@@ -4,8 +4,9 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use crate::{
     error::{AuthenticationError, ConnectionError, FrameTooBig, InvalidRequest},
+    extensions::ProtocolExtensions,
     frame::envelope::ENVELOPE_MAX_LENGTH,
-    protocol::{auth::AuthenticationProtocol, read::read_envelope_v4},
+    protocol::{auth::AuthenticationProtocol, read::read_envelope, write::write_envelope},
     request::{auth::AuthResponse, options::Options, startup::Startup, Request, RequestExt},
     response::{auth::AuthChallenge, supported::Supported, Response, ResponseBody},
     utils::invalid_data,
@@ -20,37 +21,64 @@ fn invalid_response(body: ResponseBody) -> ConnectionError {
     invalid_data(format!("invalid response: {body:?}")).into()
 }
 
-async fn execute_v4(
+async fn execute_internal(
     mut connection: impl AsyncWrite + AsyncRead + Unpin,
     version: ProtocolVersion,
+    extensions: ProtocolExtensions,
     request: impl Request,
-) -> Result<ResponseBody, ConnectionError> {
+    before_startup: bool,
+) -> Result<Response, ConnectionError> {
     let size = request
-        .serialized_envelope_size(version, Default::default(), None)
+        .serialized_envelope_size(version, extensions, None)
         .map_err(InvalidRequest::from)?;
     if size > ENVELOPE_MAX_LENGTH {
         return Err(InvalidRequest::from(FrameTooBig(size)).into());
     }
-    let mut buffer = vec![0; size];
-    request.serialize_envelope(version, Default::default(), false, None, 0, &mut buffer);
-    connection.write_all(&buffer).await?;
+    let mut envelope = vec![0; size];
+    request.serialize_envelope(version, extensions, false, None, 0, &mut envelope);
+    let execution_version = if before_startup {
+        ProtocolVersion::V4
+    } else {
+        version
+    };
+    write_envelope(execution_version, false, &envelope, &mut connection).await?;
     connection.flush().await?;
-    let envelope = read_envelope_v4(connection, None).await?;
+    let envelope = read_envelope(execution_version, None, &mut connection).await?;
     if envelope.stream != 0 {
         return Err(invalid_data("stream mismatch").into());
     }
     let response = Response::deserialize(version, Default::default(), envelope, None)?;
-    Ok(response.ok()?.body)
+    Ok(response.ok()?)
+}
+
+pub async fn execute_before_startup(
+    connection: impl AsyncWrite + AsyncRead + Unpin,
+    version: ProtocolVersion,
+    extensions: ProtocolExtensions,
+    request: impl Request,
+) -> Result<Response, ConnectionError> {
+    execute_internal(connection, version, extensions, request, true).await
+}
+
+pub async fn execute(
+    connection: impl AsyncWrite + AsyncRead + Unpin,
+    version: ProtocolVersion,
+    extensions: ProtocolExtensions,
+    request: impl Request,
+) -> Result<Response, ConnectionError> {
+    execute_internal(connection, version, extensions, request, false).await
 }
 
 pub async fn get_supported(
     mut connection: impl AsyncWrite + AsyncRead + Unpin,
     version: ProtocolVersion,
 ) -> Result<Supported, ConnectionError> {
-    match execute_v4(&mut connection, version, Options).await {
-        Ok(ResponseBody::Supported(supported)) => Ok(supported),
-        Ok(other) => Err(invalid_response(other)),
-        Err(err) => Err(err),
+    match execute_before_startup(&mut connection, version, Default::default(), Options)
+        .await?
+        .body
+    {
+        ResponseBody::Supported(supported) => Ok(supported),
+        other => Err(invalid_response(other)),
     }
 }
 
@@ -61,7 +89,15 @@ pub async fn startup(
     options: &HashMap<String, String>,
     authentication: Option<&dyn AuthenticationProtocol>,
 ) -> Result<(), ConnectionError> {
-    let authenticator = match execute_v4(&mut connection, version, Startup { options }).await? {
+    let authenticator = match execute_before_startup(
+        &mut connection,
+        version,
+        Default::default(),
+        Startup { options },
+    )
+    .await?
+    .body
+    {
         ResponseBody::Ready => return Ok(()),
         ResponseBody::Authenticate(auth) => auth.authenticator,
         other => return Err(invalid_response(other)),
@@ -78,7 +114,15 @@ pub async fn startup(
         })
     });
     loop {
-        match execute_v4(&mut connection, version, AuthResponse { token }).await? {
+        match execute_before_startup(
+            &mut connection,
+            version,
+            Default::default(),
+            AuthResponse { token },
+        )
+        .await?
+        .body
+        {
             ResponseBody::AuthSuccess(_) => return Ok(()),
             ResponseBody::AuthChallenge(AuthChallenge { token: tk, .. }) => {
                 token = session.challenge(tk).await?

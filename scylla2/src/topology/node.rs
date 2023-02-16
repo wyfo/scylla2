@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::SocketAddr,
+    fmt,
     num::NonZeroU16,
     str::FromStr,
     sync::{
@@ -21,7 +21,8 @@ use uuid::Uuid;
 
 use crate::{
     connection::{
-        config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
+        config::{InitSocket, ReconnectionPolicy},
+        tcp::TcpConnection,
         Connection, OwnedConnection,
     },
     error::{ConnectionExecutionError, Disconnected, ExecutionError},
@@ -29,11 +30,15 @@ use crate::{
     session::event::SessionEvent,
     statement::query::cql_query,
     topology::{
+        node::worker::NodeWorker,
         partitioner::Token,
-        peer::{AddressTranslator, NodeDistance, Peer, ShardAwarePort},
+        peer::{AddressTranslator, AddressTranslatorExt, NodeDistance, Peer},
         sharding::Sharder,
     },
+    utils::RepeatLast,
 };
+
+mod worker;
 
 #[derive(Debug, Copy, Clone)]
 pub enum PoolSize {
@@ -82,14 +87,28 @@ impl ConnectionPool {
     fn new(
         pool_size: PoolSize,
         sharder: Option<Sharder>,
-        connection: impl Fn() -> Connection,
+        version: ProtocolVersion,
+        extensions: ProtocolExtensions,
+        config: &NodeConfig,
     ) -> Self {
         let connection_count = match (pool_size, &sharder) {
             (PoolSize::PerHost(count), _) | (PoolSize::PerShard(count), None) => count.get(),
             (PoolSize::PerShard(count), Some(sharder)) => count.get() * sharder.nr_shards().get(),
         };
+        let connections = (0..connection_count)
+            .map(|_| {
+                Connection::new(
+                    version,
+                    extensions,
+                    config.compression(),
+                    config.compression_min_size,
+                    config.buffer_size,
+                    config.orphan_count_threshold,
+                )
+            })
+            .collect();
         Self {
-            connections: (0..connection_count).map(|_| connection()).collect(),
+            connections,
             sharder,
         }
     }
@@ -106,15 +125,16 @@ const REMOVED: isize = -1;
 const PEER_CHANGED: isize = -2;
 const DISTANCE_CHANGED: isize = -3;
 const SHARDING_CHANGED: isize = -4;
-const SESSION_CLOSED: isize = -5;
+const EXTENSIONS_CHANGED: isize = -5;
+const SESSION_CLOSED: isize = -6;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum NodeDisconnectionReason {
     Removed,
     PeerChanged,
-    TranslatedAddressChanged,
     DistanceChanged,
     ShardingChanged,
+    ExtensionsChanged,
     SessionClosed,
 }
 
@@ -124,7 +144,6 @@ impl From<NodeDisconnectionReason> for NodeStatus {
     }
 }
 
-#[derive(Debug)]
 pub struct Node {
     peer: Peer,
     distance: NodeDistance,
@@ -134,6 +153,18 @@ pub struct Node {
     session_events: mpsc::UnboundedSender<SessionEvent>,
     connection_tx: mpsc::UnboundedSender<Option<NodeDisconnectionReason>>,
     schema_agreement_interval: Duration,
+}
+
+impl fmt::Debug for Node {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("peer", &self.peer)
+            .field("distance", &self.distance)
+            .field("status", &self.status())
+            .field("connections", &self.connections())
+            .field("sharder", &self.sharder())
+            .finish()
+    }
 }
 
 impl Node {
@@ -188,6 +219,7 @@ impl Node {
             PEER_CHANGED => NodeDisconnectionReason::PeerChanged.into(),
             DISTANCE_CHANGED => NodeDisconnectionReason::DistanceChanged.into(),
             SHARDING_CHANGED => NodeDisconnectionReason::ShardingChanged.into(),
+            EXTENSIONS_CHANGED => NodeDisconnectionReason::ExtensionsChanged.into(),
             SESSION_CLOSED => NodeDisconnectionReason::SessionClosed.into(),
             _ => unreachable!(),
         }
@@ -288,71 +320,99 @@ impl Node {
         self.connection_tx.send(Some(reason)).ok();
     }
 
+    fn acknowledge_disconnection(self: Arc<Self>, reason: NodeDisconnectionReason) {
+        let disconnected = match reason {
+            NodeDisconnectionReason::Removed => REMOVED,
+            NodeDisconnectionReason::PeerChanged => PEER_CHANGED,
+            NodeDisconnectionReason::DistanceChanged => DISTANCE_CHANGED,
+            NodeDisconnectionReason::ShardingChanged => SHARDING_CHANGED,
+            NodeDisconnectionReason::ExtensionsChanged => EXTENSIONS_CHANGED,
+            NodeDisconnectionReason::SessionClosed => SESSION_CLOSED,
+        };
+        self.active_connection_count
+            .store(disconnected, Ordering::Relaxed);
+        let event = SessionEvent::NodeStatusUpdate {
+            node: self.clone(),
+            status: NodeStatus::Disconnected(reason),
+        };
+        self.session_events.send(event).ok();
+    }
+
+    fn update_active_connection_count(&self, update: isize) {
+        assert!(update == 1 || update == -1);
+        let mut conn_count = self.active_connection_count.load(Ordering::Relaxed);
+        while (update == 1 && conn_count >= 0) || (update == -1 && conn_count > 1) {
+            match self.active_connection_count.compare_exchange_weak(
+                conn_count,
+                conn_count + update,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(c) => conn_count = c,
+            }
+        }
+    }
+
     pub(crate) async fn worker(
         self: Arc<Self>,
         config: Arc<NodeConfig>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-        connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
+        mut connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
     ) {
-        todo!()
+        for delay in RepeatLast::new(config.reconnection_policy.reconnection_delays()) {
+            let translated = config
+                .address_translator
+                .translate_or_warn(self.peer.rpc_address, &self.session_events)
+                .await;
+            if let Ok((address, shard_aware_port)) = translated {
+                match TcpConnection::open_with_minimal_version(
+                    address,
+                    None,
+                    config.init_socket.as_ref(),
+                    #[cfg(feature = "ssl")]
+                    config.ssl_context.as_ref(),
+                    config.connect_timeout,
+                    config.minimal_protocol_version,
+                )
+                .await
+                {
+                    Ok((conn, version, supported)) => {
+                        let sharder = Sharder::from_supported(&supported);
+                        let extensions = ProtocolExtensions::from_supported(&supported);
+                        self.connection_pool
+                            .set(ConnectionPool::new(
+                                config.pool_size,
+                                sharder,
+                                version,
+                                extensions,
+                                &config,
+                            ))
+                            .unwrap();
+                        let worker = NodeWorker::new(self, config, used_keyspace, connection_rx);
+                        worker
+                            .run(conn, supported, address, shard_aware_port)
+                            .await
+                            .ok();
+                        return;
+                    }
+                    Err(err) => {
+                        let event = SessionEvent::ConnectionFailed {
+                            node: self.clone(),
+                            error: Arc::new(err),
+                        };
+                        self.session_events.send(event).ok();
+                    }
+                }
+            }
+            tokio::select! {
+                Some(Some(reason)) = connection_rx.recv() => {
+                    self.acknowledge_disconnection(reason);
+                    return
+                }
+                _= tokio::time::sleep(delay) => {}
+                else => {}
+            }
+        }
     }
-}
-
-impl Node {
-    // pub(crate) async fn connect(
-    //     self: Arc<Self>,
-    //     config: Arc<NodeConfig>,
-    //     used_keyspace: Arc<tokio::sync::RwLock<Option<String>>>,
-    //     session_events: broadcast::Sender<(SessionEvent, Instant)>,
-    //     connection_rx: mpsc::Receiver<bool>,
-    //     reconnect: mpsc::Sender<Arc<Node>>,
-    // ) {
-    //     let mut reconnection_delays =
-    //         ReconnectionDelays::new(config.reconnection_policy.reconnection_delays());
-    //     let (version, supported) = loop {
-    //         match self
-    //             .get_supported(
-    //                 config.connect_timeout,
-    //                 config.minimal_protocol_version,
-    //                 #[cfg(feature = "ssl")]
-    //                 config.ssl_context.as_ref(),
-    //             )
-    //             .await
-    //         {
-    //             Ok(supported) => break supported,
-    //             Err(error) => {
-    //                 #[cfg(feature = "tracing")]
-    //                 tracing::warn!(
-    //                     address = self.address,
-    //                     error,
-    //                     "Initial node connection failed"
-    //                 );
-    //             }
-    //         }
-    //         tokio::select! {
-    //             Ok(true) = connection_rx.recv() => {}
-    //             _ = tokio::time::sleep(reconnection_delays.next_delay()) => {}
-    //             else => return,
-    //         }
-    //     };
-    //     let extensions = ProtocolExtensions::from_supported(&supported);
-    //     let sharder = Sharder::from_supported(&supported);
-    //     #[allow(unused_mut)]
-    //     let mut shard_aware_port: Option<u16> = supported.get("SCYLLA_SHARD_AWARE_PORT");
-    //     #[cfg(feature = "ssl")]
-    //     if config.ssl_context.is_some() {
-    //         shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT")
-    //     }
-    //     let pool = ConnectionPool::new(config.pool_size, sharder, || {
-    //         Connection::new(
-    //             version,
-    //             extensions,
-    //             config.compression(),
-    //             config.compression_min_size,
-    //             config.buffer_size,
-    //             config.orphan_count_threshold,
-    //         )
-    //     });
-    //     let pool = self.connection_pool.try_insert(pool).ok();
-    // }
 }

@@ -1,4 +1,4 @@
-use std::{io, iter, iter::Fuse, time::Duration};
+use std::{io, iter, time::Duration};
 
 use socket2::Socket;
 
@@ -36,7 +36,7 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -117,29 +117,6 @@ where
 
 impl ReconnectionPolicy for Duration {
     fn reconnection_delays(&self) -> Box<dyn Iterator<Item = Duration> + Send + Sync> {
-        return Box::new(iter::repeat(*self));
-    }
-}
-
-pub(crate) struct ReconnectionDelays {
-    iter: Fuse<Box<dyn Iterator<Item = Duration>>>,
-    last: Option<Duration>,
-}
-
-impl ReconnectionDelays {
-    pub(crate) fn new(iter: Box<dyn Iterator<Item = Duration>>) -> Self {
-        Self {
-            iter: iter.fuse(),
-            last: None,
-        }
-    }
-
-    pub(crate) fn next_delay(&mut self) -> Duration {
-        if let Some(next) = self.iter.next() {
-            self.last = Some(next);
-            next
-        } else {
-            self.last.expect("Reconnection delays must not be empty")
-        }
+        Box::new(iter::repeat(*self))
     }
 }

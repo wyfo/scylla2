@@ -1,4 +1,4 @@
-use std::{num::Wrapping, sync::Arc};
+use std::{num::Wrapping, str::FromStr, sync::Arc};
 
 use arc_swap::ArcSwap;
 use bytes::BufMut;
@@ -9,7 +9,7 @@ use scylla2_cql::{
 };
 
 use crate::{
-    error::PartitionKeyError,
+    error::{PartitionKeyError, UnknownPartitioner},
     topology::ring::{Partition, Ring},
 };
 
@@ -124,17 +124,21 @@ pub enum Partitioner {
     Cdc,
 }
 
-impl Partitioner {
-    pub fn from_str(name: &str) -> Option<Self> {
+impl FromStr for Partitioner {
+    type Err = UnknownPartitioner;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
         if name.ends_with("Murmur3Partitioner") {
-            Some(Partitioner::Murmur3)
+            Ok(Partitioner::Murmur3)
         } else if name.ends_with("CDCPartitioner") {
-            Some(Partitioner::Cdc)
+            Ok(Partitioner::Cdc)
         } else {
-            None
+            Err(UnknownPartitioner)
         }
     }
+}
 
+impl Partitioner {
     pub fn name(&self) -> &str {
         match self {
             Self::Murmur3 => "Murmur3Partitioner",
@@ -188,6 +192,8 @@ trait PartitioningValues {
     ) -> Option<Result<Token, PartitionKeyError>>;
 }
 
+// TODO refactor token computation with trait in scylla2 crate
+#[allow(dead_code)]
 fn check_size(pki: u16, value: impl AsValue) -> Result<usize, PartitionKeyError> {
     match value.as_value().value_size() {
         Ok(0) => Err(PartitionKeyError::Null { value: pki }),

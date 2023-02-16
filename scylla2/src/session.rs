@@ -17,7 +17,7 @@ use scylla2_cql::{
     request::prepare::Prepare,
     response::{result::CqlResult, Response, ResponseBody},
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::{
@@ -45,7 +45,7 @@ use crate::{
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason},
         partitioner::{Partitioner, Partitioning},
-        peer::{AddressTranslator, NodeDistance, NodeLocalizer, Peer},
+        peer::{NodeDistance, NodeLocalizer, Peer},
         ring::{Partition, ReplicationStrategy, Ring},
         NodeByDistance, Topology,
     },
@@ -59,7 +59,6 @@ pub mod event;
 mod worker;
 
 pub(crate) struct SessionInner {
-    address_translator: Arc<dyn AddressTranslator>,
     auto_await_schema_agreement_timeout: Option<Duration>,
     control_connection: ArcSwap<ControlConnection>,
     database_events: broadcast::Sender<Event>,
@@ -154,7 +153,6 @@ impl Session {
             }
         }
         let inner = Arc::new(SessionInner {
-            address_translator: config.address_translator,
             auto_await_schema_agreement_timeout: config.auto_await_schema_agreement_timeout,
             control_connection: ArcSwap::from_pointee(control_conn?),
             database_events: config.database_event_channel,
@@ -177,14 +175,16 @@ impl Session {
             topology_lock: Default::default(),
         });
         let session = Self(inner);
+        let (started_tx, started_rx) = oneshot::channel();
         let weak = Arc::downgrade(&session.0);
-        tokio::spawn(database_event_worker(
-            weak.clone(),
-            database_events_internal_rx,
-        ));
         tokio::spawn(session_event_worker(
             weak.clone(),
             session_events_internal_rx,
+            started_tx,
+        ));
+        tokio::spawn(database_event_worker(
+            weak.clone(),
+            database_events_internal_rx,
         ));
         if let Some(interval) = local_heartbeat_interval {
             tokio::spawn(heartbeat_worker(
@@ -212,6 +212,7 @@ impl Session {
             Err(ExecutionError::Database(error)) => Err(error.into()),
             _ => unreachable!(),
         }?;
+        started_rx.await.ok();
         Ok(session)
     }
 
@@ -442,7 +443,7 @@ impl Session {
             .get_partitioner(keyspace, table)
             .await?
             .as_deref()
-            .and_then(Partitioner::from_str)
+            .and_then(|partitioner| partitioner.parse().ok())
             .unwrap_or_default())
     }
 
@@ -649,9 +650,9 @@ impl Session {
     }
 }
 
-impl Drop for Session {
+impl Drop for SessionInner {
     fn drop(&mut self) {
-        for node in self.topology().nodes() {
+        for node in self.topology.load().nodes() {
             node.disconnect(NodeDisconnectionReason::SessionClosed);
         }
     }

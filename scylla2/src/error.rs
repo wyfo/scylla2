@@ -1,10 +1,11 @@
 use std::io;
 
-use scylla2_cql::error::{DatabaseError, InvalidRequest, TypeError};
-
+use scylla2_cql::{
+    error::{DatabaseError, InvalidRequest, TypeError},
+    event::SchemaChangeEvent,
+};
 #[rustfmt::skip]
 pub use scylla2_cql::error::ConnectionError;
-use scylla2_cql::{event::SchemaChangeEvent, response::ResponseBody};
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -102,3 +103,7 @@ pub enum RowsError {
     #[error("No metadata")]
     NoMetadata,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Unknown partitioner")]
+pub struct UnknownPartitioner;

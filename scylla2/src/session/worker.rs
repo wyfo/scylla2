@@ -1,7 +1,7 @@
 use std::{convert::Infallible, sync::Weak, time::Duration};
 
 use scylla2_cql::event::{Event, StatusChangeEvent};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     session::{event::SessionEventType, SessionInner},
@@ -49,17 +49,27 @@ pub(super) async fn database_event_worker(
 pub(super) async fn session_event_worker(
     session: Weak<SessionInner>,
     mut session_events_internal: mpsc::UnboundedReceiver<SessionEvent>,
+    started: oneshot::Sender<()>,
 ) -> Option<Infallible> {
+    let mut started = Some(started);
     loop {
         let event = session_events_internal.recv().await?;
         let session = Session(session.upgrade()?);
         match &event {
-            SessionEvent::NodeStatusUpdate { status, .. }
-                if matches!(
-                    status,
-                    NodeStatus::Disconnected(NodeDisconnectionReason::ShardingChanged)
-                ) =>
-            {
+            SessionEvent::NodeStatusUpdate {
+                status: NodeStatus::Up,
+                ..
+            } if started.is_some() => {
+                started.take().unwrap().send(()).ok();
+            }
+            SessionEvent::NodeStatusUpdate {
+                status:
+                    NodeStatus::Disconnected(
+                        NodeDisconnectionReason::ShardingChanged
+                        | NodeDisconnectionReason::ExtensionsChanged,
+                    ),
+                ..
+            } => {
                 let session = session.clone();
                 tokio::spawn(async move { session.refresh_topology().await });
             }

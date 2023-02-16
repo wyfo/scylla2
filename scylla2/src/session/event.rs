@@ -21,16 +21,16 @@ pub enum SessionEvent {
     },
     ConnectionOpened {
         node: Arc<Node>,
-        shard: Option<u16>,
+        shard: u16,
         index: usize,
     },
     ConnectionFailed {
-        node: Option<Arc<Node>>,
+        node: Arc<Node>,
         error: Arc<ConnectionError>,
     },
     ConnectionClosed {
-        node: Option<Arc<Node>>,
-        shard: Option<u16>,
+        node: Arc<Node>,
+        shard: u16,
         index: usize,
         error: Option<Arc<io::Error>>,
     },

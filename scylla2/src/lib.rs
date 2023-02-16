@@ -24,20 +24,30 @@ pub use crate::{
 
 #[cfg(test)]
 mod test {
+    use std::env;
+
     use crate::SessionConfig;
 
     #[tokio::test]
     async fn it_works() {
-        println!("{:?}", &[][0..0] as &[u8]);
         let session = SessionConfig::new()
-            .nodes(["10.69.0.2:19042"])
+            .nodes([env::var("SCYLLA_URI").unwrap()])
             .connect()
             .await
             .unwrap();
         println!("connected");
         for node in session.topology().nodes() {
-            println!("{:?}", node.peer());
+            println!("{node:?}");
         }
-        println!("{:?}", session.execute("", ()).await);
+        println!(
+            "{:?}",
+            session
+                .execute("SELECT key FROM system.local where key = 'local'", ())
+                .await
+                .unwrap()
+                .rows::<(String,)>()
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+        );
     }
 }

@@ -21,6 +21,7 @@ use crate::{
     connection::config::InitSocket, error::ConnectionError, topology::sharding::ShardInfo,
 };
 
+#[derive(Debug)]
 pub(crate) enum TcpConnection {
     Tcp(TcpStream),
     #[cfg(feature = "ssl")]
@@ -77,7 +78,7 @@ impl TcpConnection {
         #[cfg(feature = "ssl")] ssl_context: Option<&openssl::ssl::SslContext>,
         timeout: Duration,
         version: ProtocolVersion,
-    ) -> Result<(Self, ProtocolVersion, Supported), ConnectionError> {
+    ) -> Result<(Self, Supported), ConnectionError> {
         let conn_fut = Self::new(
             address,
             shard,
@@ -87,7 +88,7 @@ impl TcpConnection {
         );
         let mut conn = tokio::time::timeout(timeout, conn_fut).await??;
         let supported = get_supported(&mut conn, version).await?;
-        Ok((conn, version, supported))
+        Ok((conn, supported))
     }
 
     pub(crate) async fn open_with_minimal_version(
@@ -117,12 +118,13 @@ impl TcpConnection {
             )
             .await
             {
+                Ok((conn, supported)) => return Ok((conn, version, supported)),
                 Err(ConnectionError::Database(err))
                     if err.kind == DatabaseErrorKind::ProtocolError =>
                 {
                     error = Some(err)
                 }
-                res => return res,
+                Err(err) => return Err(err),
             }
         }
         Err(error.unwrap().into())

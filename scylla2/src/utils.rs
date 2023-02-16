@@ -2,7 +2,7 @@ use std::{
     future::Future,
     io,
     io::IoSlice,
-    mem::replace,
+    iter::Fuse,
     net::SocketAddr,
     pin::Pin,
     task::{ready, Context, Poll},
@@ -10,6 +10,8 @@ use std::{
 
 use scylla2_cql::response::ResponseBody;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+
+use crate::error::BoxedError;
 
 pub(crate) fn invalid_response(response: ResponseBody) -> io::Error {
     io::Error::new(
@@ -41,7 +43,7 @@ impl<'a> IoSliceExt<'a> for IoSlice<'a> {
             }
         }
 
-        *bufs = &mut replace(bufs, &mut [])[remove..];
+        *bufs = &mut std::mem::take(bufs)[remove..];
         if bufs.is_empty() {
             assert_eq!(
                 n, accumulated_len,
@@ -152,4 +154,35 @@ macro_rules! tuples {
 
 pub(crate) use tuples;
 
-use crate::error::BoxedError;
+pub(crate) struct RepeatLast<I, T> {
+    iter: Fuse<I>,
+    last: Option<T>,
+}
+
+impl<I, T> RepeatLast<I, T>
+where
+    I: Iterator<Item = T>,
+{
+    pub(crate) fn new(iter: I) -> Self {
+        Self {
+            iter: iter.fuse(),
+            last: None,
+        }
+    }
+}
+
+impl<I, T> Iterator for RepeatLast<I, T>
+where
+    I: Iterator<Item = T>,
+    T: Clone,
+{
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        if let Some(next) = self.iter.next() {
+            self.last = Some(next.clone());
+            Some(next)
+        } else {
+            self.last.clone()
+        }
+    }
+}

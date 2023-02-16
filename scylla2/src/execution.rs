@@ -1,6 +1,5 @@
 use std::{collections::HashMap, io, sync::Arc};
 
-use futures::TryFutureExt;
 use scylla2_cql::{
     event::SchemaChangeEvent,
     response::{

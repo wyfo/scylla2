@@ -372,6 +372,6 @@ impl From<String> for NodeAddress {
 
 impl From<&str> for NodeAddress {
     fn from(value: &str) -> Self {
-        NodeAddress::parse(value).unwrap_or(Self::Hostname(value.into()))
+        NodeAddress::parse(value).unwrap_or_else(|_| Self::Hostname(value.into()))
     }
 }
