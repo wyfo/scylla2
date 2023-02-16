@@ -361,14 +361,10 @@ impl Session {
         Err(ExecutionError::NoConnection)
     }
 
-    pub async fn prepare<'a, S, K>(
+    pub async fn prepare<'a>(
         &self,
-        statement: impl Into<Prepare<S, K>>,
-    ) -> Result<PreparedStatement, ExecutionError>
-    where
-        S: Into<String> + Send + Sync + Clone + AsRef<str> + 'static,
-        K: Send + Sync + Clone + AsRef<str> + 'static,
-    {
+        statement: impl Into<Prepare<Arc<str>, Arc<str>>>,
+    ) -> Result<PreparedStatement, ExecutionError> {
         let prepare = statement.into();
         let mut executions: FuturesUnordered<_> = self
             .topology()
@@ -397,7 +393,7 @@ impl Session {
                         None
                     };
                     return Ok(PreparedStatement {
-                        statement: prepare.statement.into(),
+                        statement: prepare.statement.to_string(),
                         prepared,
                         partitioning,
                         config: Default::default(),

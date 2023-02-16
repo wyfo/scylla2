@@ -24,13 +24,13 @@ pub struct Prepare<S, K> {
     pub keyspace: Option<K>,
 }
 
-impl<S> From<S> for Prepare<S, &str>
+impl<T, S, K> From<T> for Prepare<S, K>
 where
-    S: AsRef<str>,
+    T: Into<S> + AsRef<str>,
 {
-    fn from(statement: S) -> Self {
+    fn from(statement: T) -> Self {
         Self {
-            statement,
+            statement: statement.into(),
             keyspace: None,
         }
     }
