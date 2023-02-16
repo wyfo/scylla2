@@ -55,3 +55,51 @@ where
         T::result_specs(self)
     }
 }
+
+impl<T, V> Statement<V> for Box<T>
+where
+    T: ?Sized + Statement<V>,
+{
+    type Request<'a> = T::Request<'a> where Self: 'a;
+    fn as_request<'a>(
+        &'a self,
+        config: &'a StatementConfig,
+        options: &'a StatementOptions,
+        values: V,
+    ) -> Self::Request<'a> {
+        T::as_request(self, config, options, values)
+    }
+    fn config(&self) -> Option<&StatementConfig> {
+        T::config(self)
+    }
+    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
+        T::partition(self, values)
+    }
+    fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
+        T::result_specs(self)
+    }
+}
+
+impl<T, V> Statement<V> for Arc<T>
+where
+    T: ?Sized + Statement<V>,
+{
+    type Request<'a> = T::Request<'a> where Self: 'a;
+    fn as_request<'a>(
+        &'a self,
+        config: &'a StatementConfig,
+        options: &'a StatementOptions,
+        values: V,
+    ) -> Self::Request<'a> {
+        T::as_request(self, config, options, values)
+    }
+    fn config(&self) -> Option<&StatementConfig> {
+        T::config(self)
+    }
+    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
+        T::partition(self, values)
+    }
+    fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
+        T::result_specs(self)
+    }
+}
