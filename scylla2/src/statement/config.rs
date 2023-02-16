@@ -1,9 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use scylla2_cql::{
-    cql::{Consistency, SerialConsistency},
-    response::result::rows::PagingState,
-};
+use scylla2_cql::{response::result::rows::PagingState, Consistency, SerialConsistency};
 
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]

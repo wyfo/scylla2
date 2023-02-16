@@ -9,7 +9,9 @@ use bytes::BufMut;
 use enumflags2::{BitFlag, BitFlags};
 use uuid::Uuid;
 
-use crate::{error::ValueTooBig, utils::invalid_data};
+use crate::{
+    error::ValueTooBig, utils::invalid_data, Consistency, LegacyConsistency, SerialConsistency,
+};
 
 fn check_size<I>(size: impl TryInto<I> + Into<usize> + Copy) -> Result<I, ValueTooBig> {
     size.try_into().map_err(|_| ValueTooBig(size.into()))
@@ -28,54 +30,6 @@ where
     let (a, b) = buf.split_at(size);
     *buf = b;
     Ok(a)
-}
-
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, strum::FromRepr)]
-#[repr(u16)]
-#[non_exhaustive]
-pub enum Consistency {
-    Any = 0x0000,
-    One = 0x0001,
-    Two = 0x0002,
-    Three = 0x0003,
-    Quorum = 0x0004,
-    All = 0x0005,
-    #[default]
-    LocalQuorum = 0x0006,
-    EachQuorum = 0x0007,
-    LocalOne = 0x000A,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, strum::FromRepr)]
-#[repr(u16)]
-#[non_exhaustive]
-pub enum SerialConsistency {
-    Serial = 0x0008,
-    LocalSerial = 0x0009,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LegacyConsistency {
-    Regular(Consistency),
-    Serial(SerialConsistency),
-}
-
-impl From<LegacyConsistency> for u16 {
-    fn from(c: LegacyConsistency) -> u16 {
-        match c {
-            LegacyConsistency::Regular(c) => c as u16,
-            LegacyConsistency::Serial(c) => c as u16,
-        }
-    }
-}
-
-impl fmt::Display for LegacyConsistency {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Regular(c) => write!(f, "{c:?}"),
-            Self::Serial(c) => write!(f, "{c:?}"),
-        }
-    }
 }
 
 pub(crate) trait WriteCql: Sized {

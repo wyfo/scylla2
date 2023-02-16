@@ -1,13 +1,9 @@
 use enumflags2::bitflags;
 
 use crate::{
-    cql::{Consistency, SerialConsistency, WriteCql},
-    error::ValueTooBig,
-    extensions::ProtocolExtensions,
-    request::query::values::QueryValues,
-    response::result::rows::PagingState,
-    utils::flags,
-    ProtocolVersion,
+    cql::WriteCql, error::ValueTooBig, extensions::ProtocolExtensions,
+    request::query::values::QueryValues, response::result::rows::PagingState, utils::flags,
+    Consistency, ProtocolVersion, SerialConsistency,
 };
 
 #[bitflags]

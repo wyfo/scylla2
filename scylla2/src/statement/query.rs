@@ -1,13 +1,13 @@
 use std::marker::PhantomData;
 
 use scylla2_cql::{
-    cql::{Consistency, SerialConsistency},
     request::query::{
         parameters::{OnlyValues, QueryParameters as CqlQueryParameters},
         values::QueryValues,
         Query as CqlQuery,
     },
     response::result::rows::PagingState,
+    Consistency, SerialConsistency,
 };
 
 use crate::statement::{

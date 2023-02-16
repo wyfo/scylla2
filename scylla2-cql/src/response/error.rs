@@ -1,10 +1,10 @@
 use std::{collections::HashMap, io, net::IpAddr, str::FromStr};
 
 use crate::{
-    cql::{LegacyConsistency, ReadCql, ShortBytes},
+    cql::{ReadCql, ShortBytes},
     extensions::ProtocolExtensions,
     utils::invalid_data,
-    ProtocolVersion,
+    LegacyConsistency, ProtocolVersion,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, strum::FromRepr)]

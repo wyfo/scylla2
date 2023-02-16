@@ -1,13 +1,13 @@
 use enumflags2::bitflags;
 
 use crate::{
-    cql::{Consistency, SerialConsistency, ShortBytes, WriteCql},
+    cql::{ShortBytes, WriteCql},
     error::{InvalidRequest, ValueTooBig},
     extensions::ProtocolExtensions,
     frame::envelope::OpCode,
     request::{query::values::QueryValues, Request},
     utils::{flags, tuples1},
-    ProtocolVersion,
+    Consistency, ProtocolVersion, SerialConsistency,
 };
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
