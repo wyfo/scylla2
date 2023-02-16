@@ -11,7 +11,7 @@ use crate::{
     error::{ParseError, TypeError, ValueTooBig},
     response::result::{column_spec::ColumnSpec, rows::RowParser},
     utils::invalid_data,
-    value::{iterator::WriteValueIter, ReadValue, WriteValue, WriteValueExt},
+    value::{convert::AsValue, iterator::WriteValueIter, ReadValue, WriteValue, WriteValueExt},
 };
 
 const NULL_VALUE_IN_COLLECTION: &str = "Null value in collection";
@@ -266,5 +266,12 @@ impl WriteValue for CqlValue {
             CqlValue::Uuid(uuid) => uuid.write_value(buf),
             CqlValue::Varint(i) => i.write_value(buf),
         }
+    }
+}
+
+impl AsValue for CqlValue {
+    type Value<'a> = &'a Self;
+    fn as_value(&self) -> Self::Value<'_> {
+        self
     }
 }
