@@ -375,3 +375,9 @@ impl From<&str> for NodeAddress {
         NodeAddress::parse(value).unwrap_or_else(|_| Self::Hostname(value.into()))
     }
 }
+
+impl From<&String> for NodeAddress {
+    fn from(value: &String) -> Self {
+        value.as_str().into()
+    }
+}
