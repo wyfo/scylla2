@@ -23,7 +23,8 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - Node distance support (so datacenter-aware and whitelist/blacklist possibility)
 - Query plan caching (taking distance in account)
 - Optimized execution path to improve memory locality
-- Easier interface with only one method `Session::execute` instead of `Session::query`/`Session::execute`/`Se- Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
+- Easier interface with only one method `Session::execute` instead of `Session::query`/`Session::execute`/`Session::batch`
+- Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
 - Execution metadata (token, node, failed attempts, etc.) are not available for the momentssion::batch`
 - Access to database events and session events (connection opening/failure, node status update, topology update, schema agreement, etc.) using `tokio::sync::broadcast`
 - No schema metadata (but it can be built as a sidecar service, using dababase schema event and session schema agreement event to trigger refresh)
@@ -38,6 +39,9 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - test, tests, and more tests
 - benchmark
 - prepare for tablet partitioning?
+- LWT master replica optimization
+- Prepared statements repreparation
+- Paged stream
 - ...
 
 ## Performance
