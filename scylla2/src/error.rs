@@ -6,6 +6,7 @@ use scylla2_cql::{
 };
 #[rustfmt::skip]
 pub use scylla2_cql::error::ConnectionError;
+use scylla2_cql::error::DatabaseErrorKind;
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -72,6 +73,15 @@ pub enum ExecutionError {
     Database(#[from] Box<DatabaseError>),
     #[error("Schema agreement timeout {0:?}")]
     SchemaAgreementTimeout(SchemaChangeEvent),
+}
+
+impl ExecutionError {
+    pub fn as_database_error_kind(&self) -> Result<&DatabaseErrorKind, &ExecutionError> {
+        match self {
+            Self::Database(error) => Ok(&error.kind),
+            other => Err(other),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
