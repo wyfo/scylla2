@@ -1,16 +1,15 @@
-use std::{num::Wrapping, str::FromStr, sync::Arc};
+use std::{num::Wrapping, str::FromStr};
 
-use arc_swap::ArcSwap;
 use bytes::BufMut;
 use scylla2_cql::{
     error::ValueTooBig,
-    request::query::values::QueryValues,
+    request::query::values::NamedQueryValues,
     value::{convert::AsValue, WriteValue},
 };
 
 use crate::{
     error::{PartitionKeyError, UnknownPartitioner},
-    topology::ring::{Partition, Ring},
+    utils::tuples,
 };
 
 #[derive(Copy, PartialEq, Eq, PartialOrd, Ord, Clone, Debug, Hash)]
@@ -159,41 +158,32 @@ impl Partitioner {
         }
     }
 
-    pub fn token<I>(
+    pub fn token(
         &self,
-        values: &impl QueryValues,
-        pk_indexes: I,
-    ) -> Result<Token, PartitionKeyError>
-    where
-        I: IntoIterator<Item = u16> + Clone,
-        I::IntoIter: ExactSizeIterator,
-    {
-        let size = serialized_partition_key_size(values, pk_indexes.clone().into_iter())?;
+        values: &impl SerializePartitionKey,
+        pk_indexes: &[u16],
+    ) -> Result<Token, PartitionKeyError> {
+        let size = values.partition_key_size(pk_indexes)?;
         // TODO is this value appropriate?
         const TOKEN_STACK_BUFFER_SIZE: usize = 256;
         let token = if size > TOKEN_STACK_BUFFER_SIZE {
             let mut buffer = vec![0; size];
-            serialize_partition_key(values, pk_indexes.into_iter(), &mut buffer[..]);
+            values.serialize_partition_key(pk_indexes, &mut buffer);
             self.hash(&buffer)
         } else {
             let mut buffer = [0; TOKEN_STACK_BUFFER_SIZE];
-            serialize_partition_key(values, pk_indexes.into_iter(), &mut buffer[..]);
+            values.serialize_partition_key(pk_indexes, &mut buffer);
             self.hash(&buffer)
         };
         Ok(Token(token))
     }
 }
 
-trait PartitioningValues {
-    fn token(
-        &self,
-        pk_indexes: &[u16],
-        partitioner: &Partitioner,
-    ) -> Option<Result<Token, PartitionKeyError>>;
+pub trait SerializePartitionKey {
+    fn partition_key_size(&self, pk_indexes: &[u16]) -> Result<usize, PartitionKeyError>;
+    fn serialize_partition_key(&self, pk_indexes: &[u16], slice: &mut [u8]);
 }
 
-// TODO refactor token computation with trait in scylla2 crate
-#[allow(dead_code)]
 fn check_size(pki: u16, value: impl AsValue) -> Result<usize, PartitionKeyError> {
     match value.as_value().value_size() {
         Ok(0) => Err(PartitionKeyError::Null { value: pki }),
@@ -204,79 +194,134 @@ fn check_size(pki: u16, value: impl AsValue) -> Result<usize, PartitionKeyError>
     }
 }
 
-#[derive(Debug)]
-pub struct Partitioning {
-    pub(crate) partitioner: Partitioner,
-    pub(crate) ring: Arc<ArcSwap<Ring>>,
-}
-
-impl Partitioning {
-    pub fn partitioner(&self) -> &Partitioner {
-        &self.partitioner
-    }
-
-    pub fn ring(&self) -> Arc<Ring> {
-        self.ring.load_full()
-    }
-
-    pub fn get_partition<I>(
-        &self,
-        values: &impl QueryValues,
-        pk_indexes: I,
-    ) -> Result<Partition, PartitionKeyError>
-    where
-        I: IntoIterator<Item = u16> + Clone,
-        I::IntoIter: ExactSizeIterator,
-    {
-        let token = self.partitioner.token(values, pk_indexes);
-        token.map(|tk| self.ring().get_partition(tk))
-    }
-}
-
-fn serialized_partition_key_size(
-    values: impl QueryValues,
-    mut pk_indexes: impl Iterator<Item = u16> + ExactSizeIterator,
-) -> Result<usize, PartitionKeyError> {
-    let check_size = |pki| {
-        let check = |value: &dyn WriteValue| match value.value_size() {
-            Ok(0) => Err(PartitionKeyError::Null { value: pki }),
-            Ok(size) if size <= i16::MAX as usize => Ok(size),
-            Ok(size) | Err(ValueTooBig(size)) => {
-                Err(PartitionKeyError::ValueTooBig { value: pki, size })
-            }
+impl<V> SerializePartitionKey for &[V]
+where
+    V: AsValue,
+{
+    fn partition_key_size(&self, pk_indexes: &[u16]) -> Result<usize, PartitionKeyError> {
+        let value = |pki| {
+            self.get(pki as usize)
+                .ok_or(PartitionKeyError::Missing { value: pki })
         };
-        values
-            .with_value(pki, check)
-            .ok_or(PartitionKeyError::Missing { value: pki })?
-    };
-    match pk_indexes.len() {
-        0 => panic!("no partition key indexes"),
-        1 => check_size(pk_indexes.next().unwrap()),
-        _ => pk_indexes.map(|pki| Ok(2 + check_size(pki)? + 1)).sum(),
+        match pk_indexes.len() {
+            0 => Err(PartitionKeyError::NoPartitionKeyIndexes),
+            1 => {
+                let pki = pk_indexes[0];
+                check_size(pki, value(pki)?)
+            }
+            _ => pk_indexes
+                .iter()
+                .cloned()
+                .map(|pki| Ok(2 + check_size(pki, value(pki)?)? + 1))
+                .sum(),
+        }
     }
-}
 
-fn serialize_partition_key(
-    values: impl QueryValues,
-    mut pk_indexes: impl Iterator<Item = u16> + ExactSizeIterator,
-    mut slice: &mut [u8],
-) {
-    match pk_indexes.len() {
-        0 => panic!("no partition key indexes"),
-        1 => values
-            .with_value(pk_indexes.next().unwrap(), |v| v.write_value(&mut slice))
-            .unwrap(),
-        _ => {
-            for pki in pk_indexes {
-                values
-                    .with_value(pki, |value: &dyn WriteValue| {
-                        let size = value.value_size().unwrap();
-                        slice.put_i16(size as i16);
-                        value.write_value(&mut slice);
-                        slice.put_u8(0);
-                    })
-                    .unwrap();
+    fn serialize_partition_key(&self, pk_indexes: &[u16], mut slice: &mut [u8]) {
+        match pk_indexes.len() {
+            0 => panic!("no partition key indexes"),
+            1 => self[pk_indexes[0] as usize]
+                .as_value()
+                .write_value(&mut slice),
+            _ => {
+                for &pki in pk_indexes {
+                    let value = self[pki as usize].as_value();
+                    slice.put_i16(value.value_size().unwrap() as i16);
+                    value.write_value(&mut slice);
+                    slice.put_u8(0);
+                }
             }
         }
     }
 }
+
+impl<V> SerializePartitionKey for NamedQueryValues<V>
+where
+    V: AsValue,
+{
+    fn partition_key_size(&self, _pk_indexes: &[u16]) -> Result<usize, PartitionKeyError> {
+        Err(PartitionKeyError::NoValues)
+    }
+    fn serialize_partition_key(&self, _pk_indexes: &[u16], _slice: &mut [u8]) {
+        panic!("unsupported")
+    }
+}
+
+impl SerializePartitionKey for () {
+    fn partition_key_size(&self, pk_indexes: &[u16]) -> Result<usize, PartitionKeyError> {
+        Err(match pk_indexes.first() {
+            Some(&value) => PartitionKeyError::Missing { value },
+            None => PartitionKeyError::NoPartitionKeyIndexes,
+        })
+    }
+    fn serialize_partition_key(&self, _pk_indexes: &[u16], _slice: &mut [u8]) {
+        panic!("unsupported")
+    }
+}
+
+macro_rules! tuple_values {
+    ($($_:ident/$value:ident/$idx:tt),*; $len:literal) => {
+        impl<V0, $($value),*> SerializePartitionKey for (V0, $($value),*)
+        where
+            V0: AsValue,
+            $($value: AsValue,)*
+        {
+            fn partition_key_size(&self, pk_indexes: &[u16]) -> Result<usize, PartitionKeyError> {
+                match pk_indexes.len() {
+                    0 => Err(PartitionKeyError::NoPartitionKeyIndexes),
+                    1 => {
+                        match pk_indexes[0] {
+                            0 => check_size(0, &self.0),
+                            $($idx => check_size($idx, &self.$idx),)*
+                            value => Err(PartitionKeyError::Missing { value })
+                        }
+                    }
+                    _ => pk_indexes
+                        .iter()
+                        .cloned()
+                        .map(|pki| {
+                            match pki {
+                                0 => Ok(2 + check_size(0, &self.0)? + 1),
+                                $($idx => Ok(2 + check_size($idx, &self.$idx)? + 1),)*
+                                value => Err(PartitionKeyError::Missing { value })
+                            }
+                        })
+                        .sum(),
+                }
+            }
+
+            fn serialize_partition_key(&self, pk_indexes: &[u16], mut slice: &mut [u8]) {
+                match pk_indexes.len() {
+                    0 => panic!("no partition key indexes"),
+                    1 => {
+                        match pk_indexes[0] {
+                            0 => self.0.as_value().write_value(&mut slice),
+                            $($idx => self.$idx.as_value().write_value(&mut slice),)*
+                            _ => panic!("out of bound")
+                        }
+                    }
+                    _ => {
+                        for &pki in pk_indexes {
+                            match pki {
+                                0 => {
+                                    let value = &self.0.as_value();
+                                    slice.put_i16(value.value_size().unwrap() as i16);
+                                    value.write_value(&mut slice);
+                                }
+                                $($idx => {
+                                    let value = &self.$idx.as_value();
+                                    slice.put_i16(value.value_size().unwrap() as i16);
+                                    value.write_value(&mut slice);
+                                })*
+                                _ => panic!("out of bound"),
+                            }
+                            slice.put_u8(0);
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+tuples!(tuple_values);

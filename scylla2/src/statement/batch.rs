@@ -16,7 +16,7 @@ use crate::{
         query::Query,
         Statement,
     },
-    topology::ring::Partition,
+    topology::{partitioner::SerializePartitionKey, ring::Partition},
     utils::tuples,
 };
 
@@ -250,7 +250,7 @@ macro_rules! batch {
 
         impl<'b, V0, $($values),*> Statement<(V0, $($values),*)> for BatchN<$len>
         where
-            V0: QueryValues,
+            V0: QueryValues + SerializePartitionKey,
             $($values: QueryValues),*
         {
             type Request<'a> = CqlBatch<'a, &'a [PreparedStatement; $len], (V0, $($values),*)> where Self: 'a;

@@ -9,7 +9,6 @@ use crate::{
 
 pub trait QueryValues {
     fn count(&self) -> u16;
-    fn with_value<R>(&self, index: u16, f: impl FnOnce(&dyn WriteValue) -> R) -> Option<R>;
     fn named(&self) -> bool;
     fn values_size(&self) -> Result<usize, ValueTooBig>;
     fn write_values(&self, buf: &mut &mut [u8]);
@@ -21,10 +20,6 @@ where
 {
     fn count(&self) -> u16 {
         T::count(self)
-    }
-
-    fn with_value<R>(&self, index: u16, f: impl FnOnce(&dyn WriteValue) -> R) -> Option<R> {
-        T::with_value(self, index, f)
     }
 
     fn named(&self) -> bool {
@@ -46,10 +41,6 @@ where
 {
     fn count(&self) -> u16 {
         self.len() as u16
-    }
-
-    fn with_value<R>(&self, index: u16, f: impl FnOnce(&dyn WriteValue) -> R) -> Option<R> {
-        self.get(index as usize).map(|v| f(&v.as_value()))
     }
 
     fn named(&self) -> bool {
@@ -91,10 +82,6 @@ where
         self.0.clone().into_iter().len() as u16
     }
 
-    fn with_value<R>(&self, _index: u16, _f: impl FnOnce(&dyn WriteValue) -> R) -> Option<R> {
-        None
-    }
-
     fn named(&self) -> bool {
         true
     }
@@ -123,14 +110,6 @@ macro_rules! query_values_tuple {
         {
             fn count(&self) -> u16 {
                 $len
-            }
-
-            #[allow(unused_variables)]
-            fn with_value<R>(&self, index: u16, f: impl FnOnce(&dyn WriteValue) -> R) -> Option<R> {
-                match index {
-                    $($idx => Some(f(&self.$idx.as_value())),)*
-                    _ => None,
-                }
             }
 
             fn named(&self) -> bool {

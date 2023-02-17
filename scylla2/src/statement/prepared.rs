@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, ops::Deref, sync::Arc};
 
+use arc_swap::ArcSwap;
 use scylla2_cql::{
     request::{execute::Execute, query::values::QueryValues},
     response::result::{column_spec::ColumnSpec, prepared::Prepared},
@@ -12,14 +13,17 @@ use crate::{
         query::QueryParameters,
         Statement,
     },
-    topology::{partitioner::Partitioning, ring::Partition},
+    topology::{
+        partitioner::{Partitioner, SerializePartitionKey},
+        ring::{Partition, Ring},
+    },
 };
 
 #[derive(Debug)]
 pub struct PreparedStatement {
     pub(crate) statement: String,
     pub(crate) prepared: Prepared,
-    pub(crate) partitioning: Option<Partitioning>,
+    pub(crate) partitioning: Option<(Partitioner, Arc<ArcSwap<Ring>>)>,
     pub(crate) config: StatementConfig,
 }
 
@@ -35,14 +39,18 @@ impl PreparedStatement {
         &self.statement
     }
 
-    pub fn partitioning(&self) -> Option<&Partitioning> {
-        self.partitioning.as_ref()
+    pub fn partitioner(&self) -> Option<&Partitioner> {
+        Some(&self.partitioning.as_ref()?.0)
+    }
+
+    pub fn ring(&self) -> Option<Arc<Ring>> {
+        Some(self.partitioning.as_ref()?.1.load_full())
     }
 }
 
 impl<V> Statement<V> for PreparedStatement
 where
-    V: QueryValues,
+    V: QueryValues + SerializePartitionKey,
 {
     type Request<'a> = Execute<'a, QueryParameters<'a, V>, V>;
 
@@ -70,10 +78,11 @@ where
     }
 
     fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
-        self.partitioning
-            .as_ref()
-            .map(|p| p.get_partition(values, self.pk_indexes.iter().cloned()))
-            .transpose()
+        if let Some((partitioner, ring)) = self.partitioning.as_ref() {
+            let token = partitioner.token(values, &self.pk_indexes)?;
+            return Ok(Some(ring.load_full().get_partition(token)));
+        }
+        Ok(None)
     }
 
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {

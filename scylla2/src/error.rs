@@ -125,6 +125,8 @@ pub struct OngoingUseKeyspace;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PartitionKeyError {
+    #[error("No values to match partition key indexes. If you provided named query values, use positional instead (you may need to map your name on their position, using prepared statement metadata).")]
+    NoValues,
     #[error("No partition key indexes")]
     NoPartitionKeyIndexes,
     #[error("Missing value {value}")]

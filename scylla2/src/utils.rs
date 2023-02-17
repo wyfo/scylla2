@@ -130,7 +130,7 @@ pub(crate) async fn resolve_hostname(hostname: &str) -> io::Result<SocketAddr> {
         })
 }
 
-// match ($($stmt:ident/$values:ident/$idx:tt),*; len:literal)
+// match ($($stmt:ident/$values:ident/$idx:tt),*; $len:literal)
 macro_rules! tuples {
     ($macro:ident) => {
         $macro!(; 1);

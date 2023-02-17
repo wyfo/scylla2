@@ -44,7 +44,7 @@ use crate::{
     },
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason},
-        partitioner::{Partitioner, Partitioning},
+        partitioner::Partitioner,
         peer::{NodeDistance, NodeLocalizer, Peer},
         ring::{Partition, ReplicationStrategy, Ring},
         Topology,
@@ -414,7 +414,7 @@ impl Session {
                             self.get_partitioner(&col_spec.keyspace, &col_spec.table),
                             self.get_ring(&col_spec.keyspace)
                         )?;
-                        Some(Partitioning { partitioner, ring })
+                        Some((partitioner, ring))
                     } else {
                         None
                     };

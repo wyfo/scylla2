@@ -6,6 +6,7 @@ use crate::{
     extensions::ProtocolExtensions,
     frame::envelope::OpCode,
     request::{query::values::QueryValues, Request},
+    response::result::prepared::Prepared,
     utils::{flags, tuples1},
     Consistency, ProtocolVersion, SerialConsistency,
 };
@@ -142,6 +143,15 @@ impl BatchStatement for String {
     }
     fn bytes(&self) -> &[u8] {
         self.as_bytes()
+    }
+}
+
+impl BatchStatement for Prepared {
+    fn prepared(&self) -> bool {
+        true
+    }
+    fn bytes(&self) -> &[u8] {
+        &self.id
     }
 }
 
