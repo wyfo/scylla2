@@ -1,5 +1,13 @@
 use std::{
-    collections::HashMap, convert::identity, fmt, io, mem, ops::Deref, sync::Arc, time::Duration,
+    collections::HashMap,
+    convert::identity,
+    fmt, io, mem,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use scylla2_cql::{
@@ -19,7 +27,10 @@ use swap_buffer_queue::{
     error::EnqueueError, write::WriteVecBuffer, write_vectored::WriteVectoredVecBuffer,
     AsyncSBQueue, SBQueue,
 };
-use tokio::{io::ReadHalf, sync::oneshot};
+use tokio::{
+    io::ReadHalf,
+    sync::{oneshot, Notify},
+};
 
 use crate::{
     connection::{stream::StreamPool, tcp::TcpConnection},
@@ -33,11 +44,15 @@ mod stream;
 pub(crate) mod tcp;
 mod write;
 
+pub const CONNECTION_STREAM_UPPER_BOUND: usize = 1 << 15;
+
 pub struct Connection {
     version: ProtocolVersion,
     extensions: ProtocolExtensions,
     compression: Option<Compression>,
     compression_min_size: usize,
+    ongoing_requests: AtomicUsize,
+    pending_executions: Notify,
     slice_queue: AsyncSBQueue<WriteVecBuffer<FRAME_COMPRESSED_HEADER_SIZE, FRAME_TRAILER_SIZE>>,
     vectored_queue: AsyncSBQueue<WriteVectoredVecBuffer<Vec<u8>>>,
     stream_pool: StreamPool,
@@ -98,10 +113,16 @@ impl Connection {
             extensions,
             compression,
             compression_min_size,
+            ongoing_requests: AtomicUsize::new(0),
+            pending_executions: Notify::new(),
             slice_queue: SBQueue::with_capacity(buffer_size),
             vectored_queue: SBQueue::with_capacity(100),
             stream_pool: StreamPool::new(orphan_count_threshold),
         }
+    }
+
+    pub fn ongoing_requests(&self) -> usize {
+        self.ongoing_requests.load(Ordering::Relaxed)
     }
 
     pub fn is_closed(&self) -> bool {
@@ -133,6 +154,7 @@ impl Connection {
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
     ) -> Result<Response, ConnectionExecutionError> {
+        let _guard = ExecutionGuard::new(self)?;
         request.check(self.version, self.extensions)?;
         let size = request
             .serialized_envelope_size(self.version, self.extensions, custom_payload)
@@ -210,6 +232,25 @@ impl Connection {
         )?)
     }
 
+    pub async fn execute_queued(
+        &self,
+        request: impl Request,
+        tracing: bool,
+        custom_payload: Option<&HashMap<String, Vec<u8>>>,
+    ) -> Result<Response, ConnectionExecutionError> {
+        match self.execute(&request, tracing, custom_payload).await {
+            Err(ConnectionExecutionError::NoStreamAvailable) => {}
+            res => return res,
+        }
+        loop {
+            let notified = self.pending_executions.notified();
+            match self.execute(&request, tracing, custom_payload).await {
+                Err(ConnectionExecutionError::NoStreamAvailable) => notified.await,
+                res => return res,
+            }
+        }
+    }
+
     pub fn close(&self) {
         self.slice_queue.close();
         self.vectored_queue.close();
@@ -236,6 +277,7 @@ impl Connection {
                 .orphan_task(orphan_count_threshold_delay)
                 .await
         });
+        self.pending_executions.notify_waiters();
         let write_error = write_task
             .await
             .map_err(other_error)
@@ -291,5 +333,26 @@ impl Connection {
                 .ok();
             envelopes = &remain[header.length as usize..];
         }
+    }
+}
+
+struct ExecutionGuard<'a>(&'a Connection);
+
+impl<'a> ExecutionGuard<'a> {
+    fn new(conn: &'a Connection) -> Result<Self, ConnectionExecutionError> {
+        if conn.ongoing_requests.fetch_add(1, Ordering::Relaxed)
+            >= CONNECTION_STREAM_UPPER_BOUND - 1
+        {
+            conn.ongoing_requests.fetch_sub(1, Ordering::Relaxed);
+            return Err(ConnectionExecutionError::NoStreamAvailable);
+        }
+        Ok(Self(conn))
+    }
+}
+
+impl<'a> Drop for ExecutionGuard<'a> {
+    fn drop(&mut self) {
+        self.0.ongoing_requests.fetch_sub(1, Ordering::Relaxed);
+        self.0.pending_executions.notify_one()
     }
 }

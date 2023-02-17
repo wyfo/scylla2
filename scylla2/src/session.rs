@@ -329,7 +329,7 @@ impl Session {
                     };
                     let connection = &conns[index];
                     match connection
-                        .execute(&request, config.tracing.unwrap_or(false), None)
+                        .execute_queued(&request, config.tracing.unwrap_or(false), None)
                         .await
                     {
                         Ok(response) => {
@@ -643,7 +643,7 @@ impl Session {
             .iter()
             .flat_map(|node| node.connections())
             .flatten()
-            .map(|conn| conn.execute(cql_query(&query, ()), false, None))
+            .map(|conn| conn.execute_queued(cql_query(&query, ()), false, None))
             .collect();
         while let Some(res) = executions.next().await {
             if let Ok(response) = res {
