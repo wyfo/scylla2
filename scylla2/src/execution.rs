@@ -14,7 +14,7 @@ use scylla2_cql::{
 use uuid::Uuid;
 
 use crate::{
-    error::RowsError,
+    error::{ExecutionResultError, RowsError},
     utils::{invalid_response, other_error},
 };
 
@@ -31,15 +31,11 @@ impl ExecutionResult {
     pub(crate) fn from_response(
         response: Response,
         column_specs: Option<Arc<[ColumnSpec]>>,
-    ) -> io::Result<ExecutionResult> {
+    ) -> Result<ExecutionResult, ExecutionResultError> {
+        let response = response.ok()?;
         let result = match response.body {
             ResponseBody::Result(result) => result,
-            other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Invalid response: {other:?}"),
-                ))
-            }
+            other => return Err(invalid_response(other).into()),
         };
         Ok(ExecutionResult {
             tracing_id: response.tracing_id,

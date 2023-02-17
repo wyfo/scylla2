@@ -61,6 +61,14 @@ pub enum ConnectionExecutionError {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum ExecutionResultError {
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+    #[error("Database error: {0}")]
+    Database(#[from] Box<DatabaseError>),
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error(transparent)]
     PartitionKeyError(#[from] PartitionKeyError),
@@ -88,6 +96,26 @@ impl ExecutionError {
 impl From<Elapsed> for ExecutionError {
     fn from(value: Elapsed) -> Self {
         Self::Io(value.into())
+    }
+}
+
+impl From<ConnectionExecutionError> for ExecutionError {
+    fn from(value: ConnectionExecutionError) -> Self {
+        match value {
+            ConnectionExecutionError::ConnectionClosed
+            | ConnectionExecutionError::NoStreamAvailable => Self::NoConnection,
+            ConnectionExecutionError::Io(io) => io.into(),
+            ConnectionExecutionError::InvalidRequest(invalid) => invalid.into(),
+        }
+    }
+}
+
+impl From<ExecutionResultError> for ExecutionError {
+    fn from(value: ExecutionResultError) -> Self {
+        match value {
+            ExecutionResultError::Io(io) => io.into(),
+            ExecutionResultError::Database(err) => err.into(),
+        }
     }
 }
 
