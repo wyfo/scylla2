@@ -55,7 +55,7 @@ impl ReplicationStrategy {
 
 #[derive(Debug, Default, Clone)]
 struct PartitionOffsets {
-    master: usize,
+    primary: usize,
     local: Range<usize>,
     remote: Range<usize>,
     all: Range<usize>,
@@ -130,8 +130,8 @@ impl Partition {
         self.token
     }
 
-    pub fn master_node(&self) -> &Arc<Node> {
-        &self.ring.all_combinations[self.offsets.master]
+    pub fn primary_replica(&self) -> &Arc<Node> {
+        &self.ring.all_combinations[self.offsets.primary]
     }
 
     pub fn local_nodes(&self) -> &[Arc<Node>] {
@@ -259,7 +259,7 @@ impl Ring {
                 partitions.insert(
                     token,
                     PartitionOffsets {
-                        master: *node_position
+                        primary: *node_position
                             .get(&HashableNode(token_ring.get(&token).unwrap()))
                             .unwrap(),
                         local: local.clone(),
