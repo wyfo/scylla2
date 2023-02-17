@@ -40,7 +40,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         Ok(LongString(self.query).cql_size()?
             + self.parameters.serialized_size(version, extensions)?)
@@ -49,7 +49,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         LongString(self.query).write_cql(&mut slice);

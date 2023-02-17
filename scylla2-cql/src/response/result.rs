@@ -29,7 +29,7 @@ pub type CqlResult = Result;
 impl Result {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         envelope: Bytes,
         offset: usize,
     ) -> io::Result<Self> {

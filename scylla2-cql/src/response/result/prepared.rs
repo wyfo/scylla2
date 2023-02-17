@@ -33,7 +33,7 @@ pub struct Prepared {
 impl Prepared {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let buf = &mut slice;

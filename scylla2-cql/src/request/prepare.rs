@@ -45,7 +45,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         let mut size = LongString(self.statement.as_ref()).cql_size()?;
         if version >= ProtocolVersion::V5 {
@@ -60,7 +60,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         LongString(self.statement.as_ref()).write_cql(&mut slice);

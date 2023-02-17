@@ -38,7 +38,7 @@ where
     fn check(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<(), InvalidRequest> {
         match version {
             ProtocolVersion::V5 if self.result_metadata_id.is_none() => {
@@ -51,7 +51,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         let result_metadata_id_size = match version {
             ProtocolVersion::V5 => ShortBytes(self.result_metadata_id.unwrap()).cql_size()?,
@@ -65,7 +65,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         ShortBytes(self.id).write_cql(&mut slice);

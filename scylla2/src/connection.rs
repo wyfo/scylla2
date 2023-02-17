@@ -48,7 +48,7 @@ pub const CONNECTION_STREAM_UPPER_BOUND: usize = 1 << 15;
 
 pub struct Connection {
     version: ProtocolVersion,
-    extensions: ProtocolExtensions,
+    extensions: Arc<ProtocolExtensions>,
     compression: Option<Compression>,
     compression_min_size: usize,
     ongoing_requests: AtomicUsize,
@@ -102,7 +102,7 @@ impl ConnectionRef {
 impl Connection {
     pub(crate) fn new(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Arc<ProtocolExtensions>,
         compression: Option<Compression>,
         compression_min_size: usize,
         buffer_size: usize,
@@ -144,8 +144,8 @@ impl Connection {
         self.version
     }
 
-    pub fn protocol_extensions(&self) -> ProtocolExtensions {
-        self.extensions
+    pub fn protocol_extensions(&self) -> &ProtocolExtensions {
+        &self.extensions
     }
 
     pub async fn execute(
@@ -155,9 +155,9 @@ impl Connection {
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
     ) -> Result<Response, ConnectionExecutionError> {
         let _guard = ExecutionGuard::new(self)?;
-        request.check(self.version, self.extensions)?;
+        request.check(self.version, Some(&self.extensions))?;
         let size = request
-            .serialized_envelope_size(self.version, self.extensions, custom_payload)
+            .serialized_envelope_size(self.version, Some(&self.extensions), custom_payload)
             .map_err(InvalidRequest::from)?;
         let stream = self
             .stream_pool
@@ -179,7 +179,7 @@ impl Connection {
         {
             let bytes = request.compress_envelope(
                 self.version,
-                self.extensions,
+                Some(&self.extensions),
                 compression,
                 tracing,
                 custom_payload,
@@ -199,7 +199,7 @@ impl Connection {
             let write = |slice: &mut [u8]| {
                 request.serialize_envelope(
                     self.version,
-                    self.extensions,
+                    Some(&self.extensions),
                     tracing,
                     custom_payload,
                     stream.get(),
@@ -226,7 +226,7 @@ impl Connection {
         };
         Ok(Response::deserialize(
             self.version,
-            self.extensions,
+            Some(&self.extensions),
             stream.wait_response().await?,
             self.compression,
         )?)

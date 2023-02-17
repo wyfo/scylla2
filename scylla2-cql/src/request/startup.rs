@@ -17,14 +17,14 @@ impl Request for Startup<'_> {
     fn serialized_size(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         self.options.cql_size()
     }
     fn serialize(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         self.options.write_cql(&mut slice);

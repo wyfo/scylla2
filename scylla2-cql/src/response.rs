@@ -38,7 +38,7 @@ pub struct Response {
 impl Response {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         envelope: Envelope,
         compression: Option<Compression>,
     ) -> io::Result<Self> {
@@ -112,7 +112,7 @@ pub enum ResponseBody {
 impl ResponseBody {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         opcode: OpCode,
         envelope: Bytes,
         offset: usize,

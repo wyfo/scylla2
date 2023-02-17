@@ -11,7 +11,7 @@ pub struct Authenticate {
 impl Authenticate {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let authenticator = String::read_cql(&mut slice)?;
@@ -28,7 +28,7 @@ pub struct AuthChallenge {
 impl AuthChallenge {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let token = Option::<&[u8]>::read_cql(&mut slice)?.map(Into::into);
@@ -45,7 +45,7 @@ pub struct AuthSuccess {
 impl AuthSuccess {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let token = Option::<&[u8]>::read_cql(&mut slice)?.map(Into::into);

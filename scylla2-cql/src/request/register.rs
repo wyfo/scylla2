@@ -15,7 +15,7 @@ impl Request for Register<'_> {
     fn serialized_size(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         self.event_types
             .iter()
@@ -26,7 +26,7 @@ impl Request for Register<'_> {
     fn serialize(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         self.event_types

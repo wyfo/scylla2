@@ -91,6 +91,7 @@ impl ConnectionPool {
         extensions: ProtocolExtensions,
         config: &NodeConfig,
     ) -> Self {
+        let extensions = Arc::new(extensions);
         let connection_count = match (pool_size, &sharder) {
             (PoolSize::PerHost(count), _) | (PoolSize::PerShard(count), None) => count.get(),
             (PoolSize::PerShard(count), Some(sharder)) => {
@@ -101,7 +102,7 @@ impl ConnectionPool {
             .map(|_| {
                 Connection::new(
                     version,
-                    extensions,
+                    extensions.clone(),
                     config.compression(),
                     config.compression_min_size,
                     config.buffer_size,
@@ -212,7 +213,7 @@ impl Node {
         Some(self.connections()?[0].protocol_version())
     }
 
-    pub fn protocol_extensions(&self) -> Option<ProtocolExtensions> {
+    pub fn protocol_extensions(&self) -> Option<&ProtocolExtensions> {
         Some(self.connections()?[0].protocol_extensions())
     }
 

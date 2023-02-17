@@ -44,7 +44,7 @@ pub struct Error {
 impl Error {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let error_code = u32::read_cql(&mut slice)?;
@@ -252,7 +252,7 @@ pub enum ErrorKind {
 impl ErrorKind {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         code: Result<ErrorCode, u32>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
@@ -317,7 +317,7 @@ impl ErrorKind {
             Ok(ErrorCode::Unprepared) => ErrorKind::Unprepared {
                 statement_id: ShortBytes::read_cql(buf)?.0.into(),
             },
-            Err(code) if Some(code) == extensions.rate_limit_error_code => {
+            Err(code) if Some(code) == extensions.and_then(|ext| ext.rate_limit_error_code) => {
                 ErrorKind::ScyllaRateLimitReached {
                     op_type: OperationType::from_repr(u8::read_cql(buf)?)
                         .ok_or("Invalid op_type")

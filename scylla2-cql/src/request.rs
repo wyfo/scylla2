@@ -31,16 +31,21 @@ pub trait Request {
     fn check(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<(), InvalidRequest> {
         Ok(())
     }
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig>;
-    fn serialize(&self, version: ProtocolVersion, extensions: ProtocolExtensions, slice: &mut [u8]);
+    fn serialize(
+        &self,
+        version: ProtocolVersion,
+        extensions: Option<&ProtocolExtensions>,
+        slice: &mut [u8],
+    );
 }
 
 impl<T> Request for &T
@@ -54,7 +59,7 @@ where
     fn check(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<(), InvalidRequest> {
         T::check(self, version, extensions)
     }
@@ -62,7 +67,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         T::serialized_size(self, version, extensions)
     }
@@ -70,7 +75,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         slice: &mut [u8],
     ) {
         T::serialize(self, version, extensions, slice)
@@ -92,7 +97,7 @@ impl Request for SerializedRequest {
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         assert_eq!(version, self.version);
         Ok(self.bytes.len())
@@ -101,7 +106,7 @@ impl Request for SerializedRequest {
     fn serialize(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         slice: &mut [u8],
     ) {
         assert_eq!(version, self.version);
@@ -113,7 +118,7 @@ pub trait RequestExt: Request {
     fn serialized_envelope_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
     ) -> Result<usize, ValueTooBig> {
         Ok(ENVELOPE_HEADER_SIZE
@@ -124,7 +129,7 @@ pub trait RequestExt: Request {
     fn serialize_envelope(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
         stream: i16,
@@ -150,7 +155,7 @@ pub trait RequestExt: Request {
     fn serialize_envelope_owned(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
         stream: i16,
@@ -172,7 +177,7 @@ pub trait RequestExt: Request {
     fn compress_envelope(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         compression: Compression,
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
@@ -190,7 +195,7 @@ pub trait RequestExt: Request {
     fn serialized(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<SerializedRequest, InvalidRequest> {
         self.check(version, extensions)?;
         let mut bytes = vec![0; self.serialized_size(version, extensions)?];

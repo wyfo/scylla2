@@ -18,14 +18,14 @@ where
     fn serialized_size(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         self.token.as_ref().value_size()
     }
     fn serialize(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         self.token.as_ref().write_value(&mut slice)

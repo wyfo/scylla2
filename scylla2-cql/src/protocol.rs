@@ -24,7 +24,7 @@ fn invalid_response(body: ResponseBody) -> ConnectionError {
 async fn execute_internal(
     mut connection: impl AsyncWrite + AsyncRead + Unpin,
     version: ProtocolVersion,
-    extensions: ProtocolExtensions,
+    extensions: Option<&ProtocolExtensions>,
     request: impl Request,
     before_startup: bool,
 ) -> Result<Response, ConnectionError> {
@@ -54,7 +54,7 @@ async fn execute_internal(
 pub async fn execute_before_startup(
     connection: impl AsyncWrite + AsyncRead + Unpin,
     version: ProtocolVersion,
-    extensions: ProtocolExtensions,
+    extensions: Option<&ProtocolExtensions>,
     request: impl Request,
 ) -> Result<Response, ConnectionError> {
     execute_internal(connection, version, extensions, request, true).await
@@ -63,7 +63,7 @@ pub async fn execute_before_startup(
 pub async fn execute(
     connection: impl AsyncWrite + AsyncRead + Unpin,
     version: ProtocolVersion,
-    extensions: ProtocolExtensions,
+    extensions: Option<&ProtocolExtensions>,
     request: impl Request,
 ) -> Result<Response, ConnectionError> {
     execute_internal(connection, version, extensions, request, false).await

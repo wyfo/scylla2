@@ -31,7 +31,7 @@ impl Event {
 
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let event_type = <&str>::read_cql(&mut slice)?;
@@ -60,7 +60,7 @@ pub enum TopologyChangeEvent {
 impl TopologyChangeEvent {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let kind = <&str>::read_cql(&mut slice)?;
@@ -83,7 +83,7 @@ pub enum StatusChangeEvent {
 impl StatusChangeEvent {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let kind = <&str>::read_cql(&mut slice)?;
@@ -106,7 +106,7 @@ pub struct SchemaChangeEvent {
 impl SchemaChangeEvent {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         let change_type = SchemaChangeType::from_str(<&str>::read_cql(&mut slice)?)

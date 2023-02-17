@@ -10,7 +10,7 @@ pub struct SetKeyspace {
 impl SetKeyspace {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &[u8],
     ) -> io::Result<Self> {
         Ok(Self {

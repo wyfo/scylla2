@@ -24,7 +24,7 @@ pub struct Rows {
 impl Rows {
     pub fn deserialize(
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         envelope: Bytes,
         offset: usize,
     ) -> io::Result<Self> {
@@ -98,7 +98,7 @@ pub struct Metadata {
 impl Metadata {
     pub fn deserialize(
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         buf: &mut &[u8],
     ) -> io::Result<Self> {
         let flags = BitFlags::read_cql(buf)?;

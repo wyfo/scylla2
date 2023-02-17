@@ -14,7 +14,7 @@ impl Request for Options {
     fn serialized_size(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         Ok(0)
     }
@@ -22,7 +22,7 @@ impl Request for Options {
     fn serialize(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         _buf: &mut [u8],
     ) {
     }

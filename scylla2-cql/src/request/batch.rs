@@ -48,7 +48,7 @@ impl<S, V> Batch<'_, S, V> {
     fn _serialized_size(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         statement_count: u16,
         statements_size: usize,
     ) -> Result<usize, ValueTooBig> {
@@ -74,7 +74,7 @@ impl<S, V> Batch<'_, S, V> {
     fn _serialize(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         statement_count: u16,
         write_statements: impl FnOnce(&mut &mut [u8]),
         mut slice: &mut [u8],
@@ -187,7 +187,7 @@ where
     fn check(
         &self,
         _version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<(), InvalidRequest> {
         if self.statements.len() != self.values.len() {
             Err(InvalidRequest::BatchStatementsAndValuesCountNotMatching {
@@ -202,7 +202,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         let statements_size: usize = Iterator::zip(self.statements.iter(), self.values.iter())
             .map(|(stmt, val)| {
@@ -223,7 +223,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        extensions: ProtocolExtensions,
+        extensions: Option<&ProtocolExtensions>,
         slice: &mut [u8],
     ) {
         let write_statements = |buf: &mut &mut [u8]| {
@@ -259,7 +259,7 @@ macro_rules! batch {
             fn serialized_size(
                 &self,
                 version: ProtocolVersion,
-                extensions: ProtocolExtensions,
+                extensions: Option<&ProtocolExtensions>,
             ) -> Result<usize, ValueTooBig> {
                 let statements_size = (0 $(
                     + self.statements.$idx.prepared().cql_size()?
@@ -273,7 +273,7 @@ macro_rules! batch {
             fn serialize(
                 &self,
                 version: ProtocolVersion,
-                extensions: ProtocolExtensions,
+                extensions: Option<&ProtocolExtensions>,
                 slice: &mut [u8],
             ) {
                 let write_statements = |buf: &mut &mut [u8]| {
@@ -300,7 +300,7 @@ macro_rules! batch {
             fn serialized_size(
                 &self,
                 version: ProtocolVersion,
-                extensions: ProtocolExtensions,
+                extensions: Option<&ProtocolExtensions>,
             ) -> Result<usize, ValueTooBig> {
                 let statements_size = (0 $(
                     + self.statements[$idx].prepared().cql_size()?
@@ -314,7 +314,7 @@ macro_rules! batch {
             fn serialize(
                 &self,
                 version: ProtocolVersion,
-                extensions: ProtocolExtensions,
+                extensions: Option<&ProtocolExtensions>,
                 slice: &mut [u8],
             ) {
                 let write_statements = |buf: &mut &mut [u8]| {

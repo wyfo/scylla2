@@ -118,7 +118,7 @@ where
     fn serialized_size(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         fn opt_size(opt: Option<impl WriteCql>) -> Result<usize, ValueTooBig> {
             opt.as_ref().map(WriteCql::cql_size).unwrap_or(Ok(0))
@@ -147,7 +147,7 @@ where
     fn serialize(
         &self,
         version: ProtocolVersion,
-        _extensions: ProtocolExtensions,
+        _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
         self.consistency().write_cql(&mut slice);

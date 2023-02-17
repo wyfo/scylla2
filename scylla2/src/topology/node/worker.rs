@@ -74,7 +74,7 @@ impl NodeWorker {
                 .acknowledge_disconnection(NodeDisconnectionReason::ShardingChanged);
             return Err(Disconnected);
         }
-        if ProtocolExtensions::from_supported(&supported)
+        if &ProtocolExtensions::from_supported(&supported)
             != self.node.protocol_extensions().unwrap()
         {
             self.node
@@ -236,7 +236,7 @@ impl NodeWorker {
             if execute(
                 &mut conn,
                 self.node.protocol_version().unwrap(),
-                self.node.protocol_extensions().unwrap(),
+                self.node.protocol_extensions(),
                 cql_query(&query, ()),
             )
             .await
