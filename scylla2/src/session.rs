@@ -333,6 +333,29 @@ impl Session {
                         .await
                     {
                         Ok(response) => {
+                            match (&response.body, self.0.auto_await_schema_agreement_timeout) {
+                                (
+                                    ResponseBody::Result(CqlResult::SchemaChange(event)),
+                                    Some(timeout),
+                                ) => {
+                                    tokio::time::timeout(timeout, node.wait_schema_agreement())
+                                        .await
+                                        .map_err(|_| {
+                                            ExecutionError::SchemaAgreementTimeout(event.clone())
+                                        })?;
+                                }
+                                (ResponseBody::Result(CqlResult::Rows(rows)), _)
+                                    if rows.metadata.new_metadata_id.is_some() =>
+                                {
+                                    // TODO maybe a add a config flag to decide if an error has to be
+                                    // raised here
+                                    // TODO some statements (e.g. ArcSwap<Arc<PreparedStatement>>)
+                                    // should provide a way to update their metadata in Statement trait
+                                    #[cfg(feature = "tracing")]
+                                    tracing::warn!("Outdated result metadata");
+                                }
+                                _ => {}
+                            }
                             if let (
                                 ResponseBody::Result(CqlResult::SchemaChange(event)),
                                 Some(timeout),
