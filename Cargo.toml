@@ -1,4 +1,2 @@
 [workspace]
-#members = ["scylla2-cql"]
 members = ["scylla2", "scylla2-cql"]
-#members = ["debug-safe"]
