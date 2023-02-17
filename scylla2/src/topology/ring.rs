@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     error::BoxedError,
-    topology::{node::Node, partitioner::Token, peer::NodeDistance, NodeByDistance},
+    topology::{node::Node, partitioner::Token, peer::NodeDistance},
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -55,23 +55,21 @@ impl ReplicationStrategy {
 
 #[derive(Debug, Default, Clone)]
 struct PartitionOffsets {
-    local: Range<u16>,
-    remote: Range<u16>,
+    master: usize,
+    local: Range<usize>,
+    remote: Range<usize>,
+    all: Range<usize>,
 }
 
 #[derive(Debug)]
 pub struct Ring {
-    token_map: BTreeMap<Token, Vec<Arc<Node>>>,
     partitions: BTreeMap<Token, PartitionOffsets>,
     local_combinations: Vec<Arc<Node>>,
     remote_combinations: Vec<Arc<Node>>,
+    all_combinations: Vec<Arc<Node>>,
 }
 
 impl Ring {
-    pub fn token_map(&self) -> &BTreeMap<Token, Vec<Arc<Node>>> {
-        &self.token_map
-    }
-
     pub fn get_partition(self: Arc<Self>, token: Token) -> Partition {
         let offsets = self
             .partitions
@@ -131,17 +129,21 @@ impl Partition {
     pub fn token(&self) -> Token {
         self.token
     }
-}
 
-impl NodeByDistance for Partition {
-    fn local_nodes(&self) -> &[Arc<Node>] {
-        let range = self.offsets.local.start as usize..self.offsets.local.end as usize;
-        &self.ring.local_combinations[range]
+    pub fn master_node(&self) -> &Arc<Node> {
+        &self.ring.all_combinations[self.offsets.master]
     }
 
-    fn remote_nodes(&self) -> &[Arc<Node>] {
-        let range = self.offsets.remote.start as usize..self.offsets.remote.end as usize;
-        &self.ring.remote_combinations[range]
+    pub fn local_nodes(&self) -> &[Arc<Node>] {
+        &self.ring.local_combinations[self.offsets.local.clone()]
+    }
+
+    pub fn remote_nodes(&self) -> &[Arc<Node>] {
+        &self.ring.remote_combinations[self.offsets.remote.clone()]
+    }
+
+    pub fn all_nodes(&self) -> &[Arc<Node>] {
+        &self.ring.all_combinations[self.offsets.all.clone()]
     }
 }
 
@@ -149,7 +151,7 @@ impl Ring {
     pub(crate) fn new(nodes: &[Arc<Node>], strategy: &ReplicationStrategy) -> Self {
         let token_ring: BTreeMap<_, _> = nodes
             .iter()
-            .flat_map(|node| node.peer().tokens.iter().map(move |tk| (*tk, node)))
+            .flat_map(|node| node.peer().tokens.iter().map(move |tk| (*tk, node.clone())))
             .collect();
         let mut combinations: HashMap<BTreeSet<HashableNode>, Vec<Token>> = HashMap::new();
         match strategy {
@@ -204,23 +206,24 @@ impl Ring {
                 }
             }
         }
-        let mut token_map = BTreeMap::new();
         let mut partitions = BTreeMap::new();
         let mut local_combinations = Vec::new();
         let mut remote_combinations = Vec::new();
+        let mut all_combinations = Vec::new();
         let mut local_ranges = HashMap::new();
         let mut remote_ranges = HashMap::new();
+        let mut all_ranges = HashMap::new();
         for (nodes, tokens) in combinations {
             let range_by_distance =
-                |dist,
+                |dist: Option<NodeDistance>,
                  combinations: &mut Vec<Arc<Node>>,
-                 ranges: &mut HashMap<Vec<IpAddr>, Range<u16>>| {
+                 ranges: &mut HashMap<Vec<IpAddr>, Range<usize>>| {
                     let combinations_len = combinations.len();
                     combinations.extend(
                         nodes
                             .iter()
                             .map(|n| n.0.clone())
-                            .filter(|n| n.distance() == dist),
+                            .filter(|n| dist.is_none() || n.distance() == dist.unwrap()),
                     );
                     let addrs: Vec<_> = combinations[combinations_len..]
                         .iter()
@@ -232,37 +235,45 @@ impl Ring {
                         combinations.truncate(combinations_len);
                         return range.clone();
                     }
-                    let range = combinations_len as u16..combinations.len() as u16;
+                    let range = combinations_len..combinations.len();
                     ranges.insert(addrs, range.clone());
                     range
                 };
             let local = range_by_distance(
-                NodeDistance::Local,
+                Some(NodeDistance::Local),
                 &mut local_combinations,
                 &mut local_ranges,
             );
             let remote = range_by_distance(
-                NodeDistance::Remote,
+                Some(NodeDistance::Remote),
                 &mut remote_combinations,
                 &mut remote_ranges,
             );
-            let nodes: Vec<_> = nodes.into_iter().map(|n| n.0.clone()).collect();
+            let all = range_by_distance(None, &mut all_combinations, &mut all_ranges);
+            let node_position: HashMap<HashableNode, usize> = all_combinations[all.clone()]
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (HashableNode(n), i))
+                .collect();
             for token in tokens {
-                token_map.insert(token, nodes.clone());
                 partitions.insert(
                     token,
                     PartitionOffsets {
+                        master: *node_position
+                            .get(&HashableNode(token_ring.get(&token).unwrap()))
+                            .unwrap(),
                         local: local.clone(),
                         remote: remote.clone(),
+                        all: all.clone(),
                     },
                 );
             }
         }
         Ring {
-            token_map,
             partitions,
             local_combinations,
             remote_combinations,
+            all_combinations,
         }
     }
 }

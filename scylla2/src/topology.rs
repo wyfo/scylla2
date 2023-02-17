@@ -49,25 +49,19 @@ impl Topology {
         &self.nodes
     }
 
+    pub fn local_nodes(&self) -> &[Arc<Node>] {
+        &self.local_nodes
+    }
+
+    pub fn remote_nodes(&self) -> &[Arc<Node>] {
+        &self.remote_nodes
+    }
+
     pub fn nodes_by_rpc_address(&self) -> &HashMap<IpAddr, Arc<Node>> {
         &self.nodes_by_rpc_address
     }
 
     pub fn latest_refresh(&self) -> Instant {
         self.latest_refresh
-    }
-}
-
-pub trait NodeByDistance {
-    fn local_nodes(&self) -> &[Arc<Node>];
-    fn remote_nodes(&self) -> &[Arc<Node>];
-}
-
-impl NodeByDistance for Arc<Topology> {
-    fn local_nodes(&self) -> &[Arc<Node>] {
-        &self.local_nodes
-    }
-    fn remote_nodes(&self) -> &[Arc<Node>] {
-        &self.remote_nodes
     }
 }

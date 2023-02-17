@@ -47,7 +47,7 @@ use crate::{
         partitioner::{Partitioner, Partitioning},
         peer::{NodeDistance, NodeLocalizer, Peer},
         ring::{Partition, ReplicationStrategy, Ring},
-        NodeByDistance, Topology,
+        Topology,
     },
     utils::{invalid_response, other_error, resolve_hostname},
     DatabaseEventType,
