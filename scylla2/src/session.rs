@@ -387,28 +387,28 @@ impl Session {
         Err(ExecutionError::NoConnection)
     }
 
-    pub async fn prepare<'a>(
+    pub async fn prepare<S, K>(
         &self,
-        statement: impl Into<Prepare<Arc<str>, Arc<str>>>,
-    ) -> Result<PreparedStatement, ExecutionError> {
+        statement: impl Into<Prepare<S, K>>,
+    ) -> Result<PreparedStatement, ExecutionError>
+    where
+        S: AsRef<str>,
+        K: AsRef<str>,
+    {
         let prepare = statement.into();
-        let mut executions: FuturesUnordered<_> = self
-            .topology()
+        let topology = self.topology();
+        let mut executions: FuturesUnordered<_> = topology
             .nodes()
             .iter()
-            .filter_map(|node| node.get_random_owned_connection())
-            .map(|conn| {
-                let prepare = prepare.clone();
-                async move { conn.execute(prepare.clone(), false, None).await }
-            })
-            .map(tokio::spawn)
+            .filter_map(|node| node.get_random_connection())
+            .map(|conn| conn.execute(&prepare, false, None))
             .collect();
         while let Some(res) = executions.next().await {
             match res {
-                Ok(Ok(Response {
+                Ok(Response {
                     body: ResponseBody::Result(CqlResult::Prepared(prepared)),
                     ..
-                })) => {
+                }) => {
                     let partitioning = if let Some(col_spec) = prepared.column_specs.first() {
                         let (partitioner, ring) = tokio::try_join!(
                             self.get_partitioner(&col_spec.keyspace, &col_spec.table),
@@ -419,16 +419,15 @@ impl Session {
                         None
                     };
                     return Ok(PreparedStatement {
-                        statement: prepare.statement.to_string(),
+                        statement: prepare.statement.as_ref().into(),
                         prepared,
                         partitioning,
                         config: Default::default(),
                     });
                 }
-                Ok(Ok(response)) => return Err(invalid_response(response.ok()?.body).into()),
-                Ok(Err(ConnectionExecutionError::InvalidRequest(err))) => return Err(err.into()),
-                Ok(Err(_)) => {}
-                Err(err) => return Err(other_error(err).into()),
+                Ok(response) => return Err(invalid_response(response.ok()?.body).into()),
+                Err(ConnectionExecutionError::InvalidRequest(err)) => return Err(err.into()),
+                Err(_) => {}
             }
         }
         Err(ExecutionError::NoConnection)
