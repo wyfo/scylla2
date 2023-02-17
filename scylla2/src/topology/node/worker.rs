@@ -207,7 +207,7 @@ impl NodeWorker {
             self.opened_connection_count = 0;
         }
         self.opened_connection_count += 1;
-        self.opened_connections[shard].push(conn)
+        self.opened_connections[shard].push(conn);
     }
 
     async fn try_start(&mut self, conn_index: usize) -> bool {

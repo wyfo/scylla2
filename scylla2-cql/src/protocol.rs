@@ -125,7 +125,7 @@ pub async fn startup(
         {
             ResponseBody::AuthSuccess(_) => return Ok(()),
             ResponseBody::AuthChallenge(AuthChallenge { token: tk, .. }) => {
-                token = session.challenge(tk).await?
+                token = session.challenge(tk).await?;
             }
             other => return Err(invalid_response(other)),
         }

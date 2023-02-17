@@ -236,7 +236,7 @@ impl Node {
     }
 
     pub async fn wait_status(&self) {
-        self.status_notify.notified().await
+        self.status_notify.notified().await;
     }
 
     pub fn sharder(&self) -> Option<&Sharder> {

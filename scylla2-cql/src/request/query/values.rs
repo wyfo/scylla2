@@ -31,7 +31,7 @@ where
     }
 
     fn write_values(&self, buf: &mut &mut [u8]) {
-        T::write_values(self, buf)
+        T::write_values(self, buf);
     }
 }
 

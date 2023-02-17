@@ -78,7 +78,7 @@ where
         extensions: Option<&ProtocolExtensions>,
         slice: &mut [u8],
     ) {
-        T::serialize(self, version, extensions, slice)
+        T::serialize(self, version, extensions, slice);
     }
 }
 
@@ -122,7 +122,7 @@ pub trait RequestExt: Request {
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
     ) -> Result<usize, ValueTooBig> {
         Ok(ENVELOPE_HEADER_SIZE
-            + custom_payload.map(custom_payload_size).unwrap_or(Ok(0))?
+            + custom_payload.map_or(Ok(0), custom_payload_size)?
             + self.serialized_size(version, extensions)?)
     }
 

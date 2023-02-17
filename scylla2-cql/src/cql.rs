@@ -148,7 +148,7 @@ impl WriteCql for LegacyConsistency {
     }
 
     fn write_cql(&self, buf: &mut &mut [u8]) {
-        u16::from(*self).write_cql(buf)
+        u16::from(*self).write_cql(buf);
     }
 }
 
@@ -184,7 +184,7 @@ impl WriteCql for Uuid {
     }
 
     fn write_cql(&self, buf: &mut &mut [u8]) {
-        self.into_bytes().write_cql(buf)
+        self.into_bytes().write_cql(buf);
     }
 }
 impl ReadCql<'_> for Uuid {
@@ -271,7 +271,7 @@ impl WriteCql for bool {
     }
 
     fn write_cql(&self, buf: &mut &mut [u8]) {
-        (*self as u8).write_cql(buf)
+        (*self as u8).write_cql(buf);
     }
 }
 impl ReadCql<'_> for bool {
@@ -428,7 +428,7 @@ where
     }
 
     fn write_cql(&self, buf: &mut &mut [u8]) {
-        (*self).bits().write_cql(buf)
+        (*self).bits().write_cql(buf);
     }
 }
 

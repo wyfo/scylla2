@@ -52,7 +52,7 @@ pub fn deserialize_column_specs(
             table,
             name,
             r#type,
-        })
+        });
     }
     Ok(column_specs)
 }

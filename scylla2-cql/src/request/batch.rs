@@ -53,7 +53,7 @@ impl<S, V> Batch<'_, S, V> {
         statements_size: usize,
     ) -> Result<usize, ValueTooBig> {
         fn opt_size(opt: Option<impl WriteCql>) -> Result<usize, ValueTooBig> {
-            opt.as_ref().map(WriteCql::cql_size).unwrap_or(Ok(0))
+            opt.as_ref().map_or(Ok(0), WriteCql::cql_size)
         }
         let flags_size = match version {
             ProtocolVersion::V4 => 0u8.cql_size()?,
@@ -99,7 +99,7 @@ impl<S, V> Batch<'_, S, V> {
         };
         fn opt_write(opt: Option<impl WriteCql>, buf: &mut &mut [u8]) {
             if let Some(v) = opt {
-                v.write_cql(buf)
+                v.write_cql(buf);
             }
         }
         opt_write(self.serial_consistency, &mut slice);
@@ -166,9 +166,9 @@ trait BatchStatementExt: BatchStatement {
 
     fn serialize(&self, buf: &mut &mut [u8]) {
         if self.prepared() {
-            ShortBytes(self.bytes()).write_cql(buf)
+            ShortBytes(self.bytes()).write_cql(buf);
         } else {
-            self.bytes().write_cql(buf)
+            self.bytes().write_cql(buf);
         }
     }
 }

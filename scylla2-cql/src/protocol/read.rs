@@ -21,10 +21,10 @@ async fn read_envelope_v4(
     mut reader: impl AsyncRead + Unpin,
     crc: Option<&mut Crc32Hasher>,
 ) -> io::Result<Envelope> {
+    const VOID: [u8; 4] = 0x0001i32.to_be_bytes();
     let mut header_buf = [0u8; ENVELOPE_HEADER_SIZE];
     reader.read_exact(&mut header_buf).await?;
     let header = EnvelopeHeader::deserialize(header_buf)?;
-    pub const VOID: [u8; 4] = 0x0001i32.to_be_bytes();
     let body = if header.opcode == OpCode::Result && header.length as usize == VOID.len() {
         let mut buffer = [0; VOID.len()];
         reader.read_exact(&mut buffer).await?;
@@ -73,12 +73,12 @@ pub async fn read_envelope_loop<E>(
                     .await?;
                     if let Some(mut builder) = envelope_builder.take() {
                         if builder.add_part(&payload)? {
-                            callback(builder.into()).map_err(ReadLoopError::Callback)?
+                            callback(builder.into()).map_err(ReadLoopError::Callback)?;
                         } else {
-                            envelope_builder = Some(builder)
+                            envelope_builder = Some(builder);
                         }
                     } else {
-                        envelope_builder = Some(EnvelopeBuilder::new(payload)?)
+                        envelope_builder = Some(EnvelopeBuilder::new(payload)?);
                     }
                     continue;
                 }
@@ -99,7 +99,7 @@ pub async fn read_envelope_loop<E>(
                     .await?;
                     let mut buf = &payload[..];
                     while !buf.is_empty() {
-                        envelopes.push(read_envelope_v4(&mut buf, None).await?)
+                        envelopes.push(read_envelope_v4(&mut buf, None).await?);
                     }
                 } else {
                     let mut remain = header.compressed_length;
@@ -120,7 +120,7 @@ pub async fn read_envelope_loop<E>(
                 envelopes
                     .drain(..)
                     .try_for_each(&mut callback)
-                    .map_err(ReadLoopError::Callback)?
+                    .map_err(ReadLoopError::Callback)?;
             }
         }
     }

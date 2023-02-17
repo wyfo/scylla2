@@ -53,6 +53,6 @@ where
         mut slice: &mut [u8],
     ) {
         LongString(self.query).write_cql(&mut slice);
-        self.parameters.serialize(version, extensions, slice)
+        self.parameters.serialize(version, extensions, slice);
     }
 }

@@ -121,7 +121,7 @@ impl TcpConnection {
                 Err(ConnectionError::Database(err))
                     if err.kind == DatabaseErrorKind::ProtocolError =>
                 {
-                    error = Some(err)
+                    error = Some(err);
                 }
                 Err(err) => return Err(err),
             }

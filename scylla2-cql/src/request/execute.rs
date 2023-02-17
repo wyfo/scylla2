@@ -72,6 +72,6 @@ where
         if version >= ProtocolVersion::V5 {
             ShortBytes(self.result_metadata_id.unwrap()).write_cql(&mut slice);
         }
-        self.parameters.serialize(version, extensions, slice)
+        self.parameters.serialize(version, extensions, slice);
     }
 }

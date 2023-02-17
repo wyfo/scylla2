@@ -114,7 +114,7 @@ impl Ord for HashableNode<'_> {
 
 impl Hash for HashableNode<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.peer().rpc_address.hash(state)
+        self.0.peer().rpc_address.hash(state);
     }
 }
 

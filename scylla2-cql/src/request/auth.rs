@@ -28,6 +28,6 @@ where
         _extensions: Option<&ProtocolExtensions>,
         mut slice: &mut [u8],
     ) {
-        self.token.as_ref().write_value(&mut slice)
+        self.token.as_ref().write_value(&mut slice);
     }
 }

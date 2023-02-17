@@ -111,7 +111,7 @@ impl Drop for Stream<'_> {
             let (map, index) = self.pool.get_map_index(self.value);
             map.release(index);
         } else if self.pool.orphans_limit.fetch_sub(1, Ordering::Relaxed) == 0 {
-            self.pool.too_many_orphans.wake()
+            self.pool.too_many_orphans.wake();
         }
     }
 }
@@ -251,7 +251,7 @@ impl StreamPool {
 
     pub(super) fn reset(&self) {
         for map in iter::once(&self.map).chain(self.lazy_maps.iter().filter_map(OnceCell::get)) {
-            map.reset()
+            map.reset();
         }
         self.orphans_limit.store(0, Ordering::Relaxed);
     }

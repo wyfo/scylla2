@@ -149,7 +149,7 @@ pub fn crc24(buf: &[u8]) -> [u8; 3] {
         for _ in 0..8 {
             crc <<= 1;
             if crc & 0x1000000 != 0 {
-                crc ^= 0x1974F0B
+                crc ^= 0x1974F0B;
             }
         }
     }
@@ -166,7 +166,7 @@ impl Crc32Hasher {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
-        self.0.update(bytes)
+        self.0.update(bytes);
     }
 
     pub fn finish(&self) -> [u8; 4] {

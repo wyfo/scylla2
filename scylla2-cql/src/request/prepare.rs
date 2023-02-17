@@ -51,7 +51,7 @@ where
         if version >= ProtocolVersion::V5 {
             size += 0u32.cql_size()?;
             if let Some(ref ks) = self.keyspace {
-                size += ks.as_ref().cql_size()?
+                size += ks.as_ref().cql_size()?;
             }
         }
         Ok(size)

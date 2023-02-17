@@ -51,7 +51,7 @@ pub(crate) trait WriteValueExt: WriteValue {
         *buf = buf_slice;
         let buf_len = buf.len();
         self.write_value(buf);
-        len_slice.copy_from_slice(&((buf_len - buf.len()) as u32).to_be_bytes())
+        len_slice.copy_from_slice(&((buf_len - buf.len()) as u32).to_be_bytes());
     }
 }
 
@@ -417,11 +417,11 @@ where
     }
 
     fn write_value(&self, buf: &mut &mut [u8]) {
-        T::write_value(self, buf)
+        T::write_value(self, buf);
     }
 
     fn write_value_with_size(&self, buf: &mut &mut [u8]) {
-        T::write_value_with_size(self, buf)
+        T::write_value_with_size(self, buf);
     }
 }
 

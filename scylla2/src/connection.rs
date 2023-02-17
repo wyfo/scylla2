@@ -204,7 +204,7 @@ impl Connection {
                     custom_payload,
                     stream.get(),
                     slice,
-                )
+                );
             };
             match self.slice_queue.enqueue((size, write)).await {
                 Ok(_) => {}
@@ -275,7 +275,7 @@ impl Connection {
             orphan_ref
                 .get()
                 .orphan_task(orphan_count_threshold_delay)
-                .await
+                .await;
         });
         self.pending_executions.notify_waiters();
         let write_error = write_task
@@ -353,6 +353,6 @@ impl<'a> ExecutionGuard<'a> {
 impl<'a> Drop for ExecutionGuard<'a> {
     fn drop(&mut self) {
         self.0.ongoing_requests.fetch_sub(1, Ordering::Relaxed);
-        self.0.pending_executions.notify_one()
+        self.0.pending_executions.notify_one();
     }
 }

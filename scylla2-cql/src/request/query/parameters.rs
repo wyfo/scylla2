@@ -121,7 +121,7 @@ where
         _extensions: Option<&ProtocolExtensions>,
     ) -> Result<usize, ValueTooBig> {
         fn opt_size(opt: Option<impl WriteCql>) -> Result<usize, ValueTooBig> {
-            opt.as_ref().map(WriteCql::cql_size).unwrap_or(Ok(0))
+            opt.as_ref().map_or(Ok(0), WriteCql::cql_size)
         }
         let flags_size = match version {
             ProtocolVersion::V4 => 0u8.cql_size()?,
@@ -177,7 +177,7 @@ where
         }
         fn opt_write(opt: Option<impl WriteCql>, buf: &mut &mut [u8]) {
             if let Some(v) = opt {
-                v.write_cql(buf)
+                v.write_cql(buf);
             }
         }
         opt_write(self.page_size(), &mut slice);

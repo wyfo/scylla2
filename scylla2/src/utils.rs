@@ -50,7 +50,7 @@ impl<'a> IoSliceExt<'a> for IoSlice<'a> {
                 "advancing io slices beyond their length"
             );
         } else {
-            bufs[0] = IoSlice::new(unsafe { &*(&bufs[0][n - accumulated_len..] as *const [u8]) })
+            bufs[0] = IoSlice::new(unsafe { &*(&bufs[0][n - accumulated_len..] as *const [u8]) });
         }
     }
 }
