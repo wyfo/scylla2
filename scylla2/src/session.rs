@@ -81,9 +81,8 @@ pub(crate) struct SessionInner {
     topology_lock: tokio::sync::Mutex<()>,
 }
 
-// TODO ask why pub(crate) is necessary
 #[derive(Clone)]
-pub struct Session(pub(crate) Arc<SessionInner>);
+pub struct Session(Arc<SessionInner>);
 
 impl fmt::Debug for Session {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

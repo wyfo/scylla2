@@ -4,12 +4,11 @@ use scylla2_cql::event::{Event, StatusChangeEvent};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    session::{event::SessionEventType, SessionInner},
+    session::{event::SessionEventType, Session, SessionEvent, SessionInner},
     topology::{
         node::{NodeDisconnectionReason, NodeStatus},
         peer::NodeDistance,
     },
-    Session, SessionEvent,
 };
 
 pub(super) async fn database_event_worker(
