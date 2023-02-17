@@ -287,10 +287,14 @@ impl Session {
         let values = values.into_values();
         let partition = statement.partition(&values)?;
         let default_config;
-        // TODO use session default config
-        let config = match statement.config() {
-            Some(cfg) => cfg,
-            None => {
+        let config = match (statement.config(), self.statement_config()) {
+            (Some(cfg), Some(default)) => {
+                default_config = cfg.merge(default);
+                &default_config
+            }
+            (Some(cfg), None) => cfg,
+            (None, Some(default)) => default,
+            (None, None) => {
                 default_config = Default::default();
                 &default_config
             }

@@ -6,7 +6,8 @@ use std::{
 };
 
 use scylla2_cql::{
-    frame::compression::Compression, protocol::auth::AuthenticationProtocol, ProtocolVersion,
+    frame::compression::Compression, protocol::auth::AuthenticationProtocol, Consistency,
+    ProtocolVersion, SerialConsistency,
 };
 use tokio::sync::broadcast;
 
@@ -325,6 +326,41 @@ impl SessionConfig {
 
     pub fn statement_config(mut self, params: StatementConfig) -> Self {
         self.statement_config = Some(params);
+        self
+    }
+
+    pub fn statement_consistency(mut self, consistency: Consistency) -> Self {
+        if let Some(ref mut cfg) = self.statement_config {
+            cfg.consistency = Some(consistency);
+        }
+        self
+    }
+
+    pub fn statement_keyspace(mut self, keyspace: impl Into<Arc<str>>) -> Self {
+        if let Some(ref mut cfg) = self.statement_config {
+            cfg.keyspace = Some(keyspace.into());
+        }
+        self
+    }
+
+    pub fn statement_page_size(mut self, page_size: i32) -> Self {
+        if let Some(ref mut cfg) = self.statement_config {
+            cfg.page_size = Some(page_size);
+        }
+        self
+    }
+
+    pub fn statement_serial_consistency(mut self, serial_consistency: SerialConsistency) -> Self {
+        if let Some(ref mut cfg) = self.statement_config {
+            cfg.serial_consistency = Some(serial_consistency);
+        }
+        self
+    }
+
+    pub fn statement_tracing(mut self, tracing: bool) -> Self {
+        if let Some(ref mut cfg) = self.statement_config {
+            cfg.tracing = Some(tracing);
+        }
         self
     }
 
