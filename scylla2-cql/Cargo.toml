@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["chrono", "cql_value", "string"]
 bigdecimal = ["dep:bigdecimal", "num-bigint"]
 cql_value = ["bigdecimal"]
 lz4 = ["dep:lz4_flex"]
