@@ -317,7 +317,7 @@ impl ErrorKind {
             Ok(ErrorCode::Unprepared) => ErrorKind::Unprepared {
                 statement_id: ShortBytes::read_cql(buf)?.0.into(),
             },
-            Err(code) if Some(code) == extensions.and_then(|ext| ext.rate_limit_error_code) => {
+            Err(code) if Some(code) == extensions.and_then(|ext| ext.scylla_rate_limit_error) => {
                 ErrorKind::ScyllaRateLimitReached {
                     op_type: OperationType::from_repr(u8::read_cql(buf)?)
                         .ok_or("Invalid op_type")

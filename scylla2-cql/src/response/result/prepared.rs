@@ -28,6 +28,7 @@ pub struct Prepared {
     pub pk_indexes: Box<[u16]>,
     pub column_specs: Box<[ColumnSpec]>,
     pub result_specs: Option<Arc<[ColumnSpec]>>,
+    pub is_lwt: bool,
 }
 
 impl Prepared {
@@ -61,12 +62,16 @@ impl Prepared {
         let result_specs = Metadata::deserialize(version, extensions, buf)?
             .column_specs
             .map(Into::into);
+        let is_lwt = extensions
+            .and_then(|ext| ext.scylla_lwt_add_metadata_mark)
+            .map_or(false, |flag| flags.bits() | flag == flag);
         Ok(Self {
             id,
             result_metadata_id,
             pk_indexes,
             column_specs,
             result_specs,
+            is_lwt,
         })
     }
 }

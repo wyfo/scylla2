@@ -1,27 +1,36 @@
 use crate::response::supported::Supported;
 
-pub const SCYLLA_RATE_LIMIT_ERROR: &str = "SCYLLA_RATE_LIMIT_ERROR";
-const ERROR_CODE_PREFIX: &str = "ERROR_CODE=";
-
-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProtocolExtensions {
-    pub rate_limit_error_code: Option<u32>,
+    pub scylla_rate_limit_error: Option<u32>,
+    pub scylla_lwt_add_metadata_mark: Option<u32>,
 }
 
 impl ProtocolExtensions {
     pub fn from_supported(supported: &Supported) -> Self {
-        let rate_limit_error_code =
+        let scylla_rate_limit_error =
             supported
                 .options
-                .get(SCYLLA_RATE_LIMIT_ERROR)
+                .get("SCYLLA_RATE_LIMIT_ERROR")
                 .and_then(|values| {
                     values
                         .iter()
-                        .find_map(|s| s.strip_prefix(ERROR_CODE_PREFIX)?.parse().ok())
+                        .find_map(|s| s.strip_prefix("ERROR_CODE=")?.parse().ok())
                 });
+        let scylla_lwt_add_metadata_mark = supported
+            .options
+            .get("SCYLLA_LWT_ADD_METADATA_MARK")
+            .and_then(|values| {
+                values.iter().find_map(|s| {
+                    s.strip_prefix("SCYLLA_LWT_OPTIMIZATION_META_BIT_MASK=")?
+                        .parse()
+                        .ok()
+                })
+            });
         Self {
-            rate_limit_error_code,
+            scylla_rate_limit_error,
+            scylla_lwt_add_metadata_mark,
         }
     }
 }
