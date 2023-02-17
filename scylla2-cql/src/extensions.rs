@@ -9,6 +9,7 @@ pub struct ProtocolExtensions {
 
 impl ProtocolExtensions {
     pub fn from_supported(supported: &Supported) -> Self {
+        let supported = dbg!(supported);
         let scylla_rate_limit_error =
             supported
                 .options
@@ -23,7 +24,7 @@ impl ProtocolExtensions {
             .get("SCYLLA_LWT_ADD_METADATA_MARK")
             .and_then(|values| {
                 values.iter().find_map(|s| {
-                    s.strip_prefix("SCYLLA_LWT_OPTIMIZATION_META_BIT_MASK=")?
+                    s.strip_prefix("LWT_OPTI    MIZATION_META_BIT_MASK=")?
                         .parse()
                         .ok()
                 })
