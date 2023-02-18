@@ -9,7 +9,6 @@ pub struct ProtocolExtensions {
 
 impl ProtocolExtensions {
     pub fn from_supported(supported: &Supported) -> Self {
-        let supported = dbg!(supported);
         let scylla_rate_limit_error =
             supported
                 .options
