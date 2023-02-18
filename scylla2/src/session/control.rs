@@ -44,14 +44,19 @@ pub(crate) enum ControlError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
     #[error("Database error: {0}")]
-    Database(#[from] Box<DatabaseError>), // Boxed because larger than 128 bytes
+    Database(#[from] Box<DatabaseError>),
+    #[error("Connection is closed")]
+    Closed,
 }
 
 impl From<ControlError> for ConnectionError {
     fn from(value: ControlError) -> Self {
         match value {
-            ControlError::Io(err) => Self::Io(err),
-            ControlError::Database(err) => Self::Database(err),
+            ControlError::Io(err) => err.into(),
+            ControlError::Database(err) => err.into(),
+            ControlError::Closed => {
+                io::Error::new(io::ErrorKind::BrokenPipe, "Connection closed").into()
+            }
         }
     }
 }
@@ -59,8 +64,9 @@ impl From<ControlError> for ConnectionError {
 impl From<ControlError> for ExecutionError {
     fn from(value: ControlError) -> Self {
         match value {
-            ControlError::Io(err) => Self::Io(err),
-            ControlError::Database(err) => Self::Database(err),
+            ControlError::Io(err) => err.into(),
+            ControlError::Database(err) => err.into(),
+            ControlError::Closed => ExecutionError::NoConnection,
         }
     }
 }
@@ -174,7 +180,6 @@ impl ControlConnection {
     }
 
     async fn request(&self, request: impl Request) -> Result<Response, ControlError> {
-        let closed = || io::Error::new(io::ErrorKind::BrokenPipe, "Connection closed");
         let (stream, rx) = loop {
             let stream = (self.stream_generator.fetch_add(1, Ordering::Relaxed) % (1 << 15)) as i16;
             let mut streams = self.streams.lock().unwrap();
@@ -194,7 +199,7 @@ impl ControlConnection {
             self.writer.lock().await.deref_mut(),
         )
         .await?;
-        let envelope = rx.await.map_err(|_| closed())??;
+        let envelope = rx.await.map_err(|_| ControlError::Closed)??;
         let response = Response::deserialize(self.version, Default::default(), envelope, None)?;
         Ok(response.ok()?)
     }

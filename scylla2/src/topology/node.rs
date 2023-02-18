@@ -11,7 +11,7 @@ use std::{
 };
 
 use once_cell::sync::OnceCell;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::seq::SliceRandom;
 use scylla2_cql::{
     extensions::ProtocolExtensions, frame::compression::Compression,
     protocol::auth::AuthenticationProtocol, ProtocolVersion,
@@ -248,7 +248,7 @@ impl Node {
     }
 
     pub fn get_random_connection(&self) -> Option<&Connection> {
-        self.connections()?.choose(&mut thread_rng())
+        self.connections()?.choose(&mut rand::thread_rng())
     }
 
     pub fn get_random_owned_connection(self: &Arc<Self>) -> Option<OwnedConnection> {

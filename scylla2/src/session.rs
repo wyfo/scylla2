@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     fmt::Formatter,
+    future::Future,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, RwLock,
@@ -11,13 +12,14 @@ use std::{
 
 use arc_swap::ArcSwap;
 use futures::{stream::FuturesUnordered, StreamExt};
+use rand::seq::SliceRandom;
 use scylla2_cql::{
-    error::ConnectionError,
+    error::{ConnectionError, DatabaseError},
     event::Event,
     request::prepare::Prepare,
     response::{result::CqlResult, Response, ResponseBody},
 };
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use uuid::Uuid;
 
 use crate::{
@@ -29,7 +31,7 @@ use crate::{
     execution::ExecutionResult,
     session::{
         config::{NodeAddress, SessionConfig},
-        control::{ControlAddr, ControlConnection},
+        control::{ControlAddr, ControlConnection, ControlError},
         event::{SessionEvent, SessionEventType},
         worker::{
             database_event_worker, heartbeat_worker, refresh_topology_worker, session_event_worker,
@@ -61,6 +63,7 @@ mod worker;
 pub(crate) struct SessionInner {
     auto_await_schema_agreement_timeout: Option<Duration>,
     control_connection: ArcSwap<ControlConnection>,
+    control_notify: Notify,
     database_events: broadcast::Sender<Event>,
     database_event_internal: mpsc::UnboundedSender<Event>,
     database_event_filter: Option<HashSet<DatabaseEventType>>,
@@ -154,6 +157,7 @@ impl Session {
         let inner = Arc::new(SessionInner {
             auto_await_schema_agreement_timeout: config.auto_await_schema_agreement_timeout,
             control_connection: ArcSwap::from_pointee(control_conn?),
+            control_notify: Notify::new(),
             database_events: config.database_event_channel,
             database_event_internal: database_events_internal_tx,
             database_event_filter: config.database_event_filter,
@@ -223,16 +227,15 @@ impl Session {
             .reconnection_delays()
         {
             let topology = self.topology();
-            for (node, node_config) in Iterator::chain(
-                topology
-                    .local_nodes()
-                    .iter()
-                    .map(|node| (node, &self.0.node_config_local)),
-                topology
-                    .remote_nodes()
-                    .iter()
-                    .map(|node| (node, &self.0.node_config_remote)),
-            ) {
+            let local = topology
+                .local_nodes()
+                .choose_multiple(&mut rand::thread_rng(), topology.local_nodes().len())
+                .map(|node| (node, &self.0.node_config_local));
+            let remote = topology
+                .remote_nodes()
+                .choose_multiple(&mut rand::thread_rng(), topology.remote_nodes().len())
+                .map(|node| (node, &self.0.node_config_remote));
+            for (node, node_config) in local.chain(remote) {
                 match ControlConnection::open(
                     ControlAddr::Peer(node.peer().rpc_address),
                     node_config,
@@ -244,6 +247,7 @@ impl Session {
                 {
                     Ok(conn) => {
                         self.0.control_connection.store(Arc::new(conn));
+                        self.0.control_notify.notify_waiters();
                         return;
                     }
                     Err(error) => {
@@ -449,6 +453,23 @@ impl Session {
         self.0.control_connection.load_full()
     }
 
+    async fn with_control<T, F>(
+        &self,
+        f: impl Fn(Arc<ControlConnection>) -> F,
+    ) -> Result<T, Box<DatabaseError>>
+    where
+        F: Future<Output = Result<T, ControlError>>,
+    {
+        loop {
+            let notified = self.0.control_notify.notified();
+            match f(self.control()).await {
+                Ok(res) => return Ok(res),
+                Err(ControlError::Database(err)) => return Err(err),
+                Err(ControlError::Closed | ControlError::Io(_)) => notified.await,
+            }
+        }
+    }
+
     pub async fn get_partitioner(
         &self,
         keyspace: &str,
@@ -464,8 +485,7 @@ impl Session {
             return Ok(partitioner.clone());
         }
         Ok(self
-            .control()
-            .get_partitioner(keyspace, table)
+            .with_control(|ctrl| async move { ctrl.get_partitioner(keyspace, table).await })
             .await?
             .as_deref()
             .and_then(|partitioner| partitioner.parse().ok())
@@ -483,8 +503,7 @@ impl Session {
             return Ok(self.get_or_compute_ring(strategy));
         }
         let strategy = self
-            .control()
-            .get_replication(keyspace)
+            .with_control(|ctrl| async move { ctrl.get_replication(keyspace).await })
             .await?
             .map(ReplicationStrategy::parse)
             .transpose()
