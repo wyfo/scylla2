@@ -2,7 +2,6 @@ use std::{
     cmp, future,
     future::poll_fn,
     io, iter, mem,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicIsize, AtomicU32, Ordering},
@@ -100,8 +99,10 @@ impl Stream<'_> {
     }
 
     pub(super) async fn wait_response(self) -> Result<Envelope, ConnectionExecutionError> {
-        let stream = ManuallyDrop::new(self);
-        future::poll_fn(|cx| stream.node.poll(cx)).await
+        let result = future::poll_fn(|cx| self.node.poll(cx)).await;
+        self.pool.release(self.value);
+        mem::forget(self);
+        result
     }
 }
 
@@ -250,6 +251,11 @@ impl StreamPool {
             map.release(index);
         }
         Ok(())
+    }
+
+    fn release(&self, stream: i16) {
+        let (map, index) = self.get_map_index(stream);
+        map.release(index);
     }
 
     pub(super) fn reset(&self) {
