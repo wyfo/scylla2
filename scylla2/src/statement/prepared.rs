@@ -88,4 +88,8 @@ where
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         self.result_specs.clone()
     }
+
+    fn is_lwt(&self) -> bool {
+        self.is_lwt
+    }
 }

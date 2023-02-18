@@ -30,6 +30,9 @@ pub trait Statement<V> {
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         None
     }
+    fn is_lwt(&self) -> bool {
+        false
+    }
 }
 
 impl<T, V> Statement<V> for &T
@@ -53,6 +56,9 @@ where
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
+    }
+    fn is_lwt(&self) -> bool {
+        T::is_lwt(self)
     }
 }
 
@@ -78,6 +84,9 @@ where
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
     }
+    fn is_lwt(&self) -> bool {
+        T::is_lwt(self)
+    }
 }
 
 impl<T, V> Statement<V> for Arc<T>
@@ -101,5 +110,8 @@ where
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
+    }
+    fn is_lwt(&self) -> bool {
+        T::is_lwt(self)
     }
 }

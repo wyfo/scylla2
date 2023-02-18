@@ -99,6 +99,10 @@ where
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         self.statements.get(0).and_then(|s| s.result_specs())
     }
+
+    fn is_lwt(&self) -> bool {
+        self.statements.get(0).map_or(false, |s| s.is_lwt())
+    }
 }
 
 impl<'b, S, V> Statement<&'b [V]> for Batch<Vec<S>>
@@ -140,6 +144,10 @@ where
 
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         self.statements.get(0).and_then(|s| s.result_specs())
+    }
+
+    fn is_lwt(&self) -> bool {
+        self.statements.get(0).map_or(false, |s| s.is_lwt())
     }
 }
 
@@ -203,6 +211,10 @@ macro_rules! batch {
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
                 self.0.result_specs()
             }
+
+            fn is_lwt(&self) -> bool {
+                self.0.is_lwt()
+            }
         }
 
         impl<'b, S0, V0, $($stmt, $values),*> Statement<(V0, $($values),*)> for Batch<(S0, $($stmt),*)>
@@ -245,6 +257,10 @@ macro_rules! batch {
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
                 self.statements.0.result_specs()
             }
+
+            fn is_lwt(&self) -> bool {
+                self.statements.0.is_lwt()
+            }
         }
 
 
@@ -278,11 +294,15 @@ macro_rules! batch {
             }
 
             fn partition(&self, values: &(V0, $($values, )*)) -> Result<Option<Partition>, PartitionKeyError> {
-                self.statements[0].partition(&values.0)
+                <_ as Statement<V0>>::partition(&self.statements[0], (&values.0))
             }
 
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
-                 <PreparedStatement as Statement<V0>>::result_specs(&self.statements[0])
+                 <_ as Statement<V0>>::result_specs(&self.statements[0])
+            }
+
+            fn is_lwt(&self) -> bool {
+                <_ as Statement<V0>>::is_lwt(&self.statements[0])
             }
         }
     };
