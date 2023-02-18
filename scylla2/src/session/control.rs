@@ -264,7 +264,7 @@ impl ControlConnection {
         keyspace: &str,
         table: &str,
     ) -> Result<Option<String>, ControlError> {
-        match self.query("SELECT partitioner FROM system_schema.scylla_tables WHERE keyspace = ? AND table = ?", (keyspace, table)).await {
+        match self.query("SELECT partitioner FROM system_schema.scylla_tables WHERE keyspace_name = ? AND table_name = ?", (keyspace, table)).await {
             Ok(res) => {
                 Ok(maybe_cql_row(res)?.map(|(p, )|p))
             }
