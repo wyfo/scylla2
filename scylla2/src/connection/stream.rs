@@ -1,5 +1,5 @@
 use std::{
-    future,
+    cmp, future,
     future::poll_fn,
     io, iter, mem,
     mem::ManuallyDrop,
@@ -16,7 +16,7 @@ use futures::task::{noop_waker, AtomicWaker};
 use once_cell::sync::OnceCell;
 use scylla2_cql::frame::envelope::Envelope;
 
-use crate::error::ConnectionExecutionError;
+use crate::{connection::CONNECTION_STREAM_UPPER_BOUND, error::ConnectionExecutionError};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid stream received")]
@@ -182,7 +182,10 @@ impl StreamPool {
         Self {
             map: StreamMap::new(32),
             lazy_maps: Default::default(),
-            orphans_limit: AtomicIsize::new(orphan_count_threshold as isize),
+            orphans_limit: AtomicIsize::new(cmp::min(
+                orphan_count_threshold,
+                CONNECTION_STREAM_UPPER_BOUND,
+            ) as isize),
             too_many_orphans: AtomicWaker::new(),
         }
     }
