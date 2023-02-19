@@ -261,9 +261,9 @@ impl Node {
           return Some(&pool.connections)
         };
         let shard = sharder.compute_shard(token);
-        let nb_conn_per_shard = pool.connections.len() / sharder.nr_shards().get() as usize;
-        let offset = shard as usize * nb_conn_per_shard;
-        Some(&pool.connections[offset..offset + nb_conn_per_shard])
+        let conn_per_shard = pool.connections.len() / sharder.nr_shards().get() as usize;
+        let offset = shard as usize * conn_per_shard;
+        Some(&pool.connections[offset..offset + conn_per_shard])
     }
 
     pub fn round_robin(&self) -> &AtomicUsize {

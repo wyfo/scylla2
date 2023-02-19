@@ -132,8 +132,8 @@ impl NodeWorker {
                     | (Some(sharder), Some(ShardAwarePort::Port(port)), _) => (
                         (address.ip(), port).into(),
                         Some(ShardInfo {
-                            shard: self.shard(conn_index) as u16,
                             nr_shards: sharder.nr_shards(),
+                            shard: self.shard(conn_index) as u16,
                         }),
                     ),
                     _ => (address, None),
@@ -187,7 +187,8 @@ impl NodeWorker {
     }
 
     fn shard(&self, conn_index: usize) -> usize {
-        conn_index / self.opened_connections.len()
+        let conn_per_shard = self.used_connections.len() / self.opened_connections.len();
+        conn_index / conn_per_shard
     }
 
     fn push(&mut self, shard: usize, conn: TcpConnection) {
