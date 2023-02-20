@@ -28,7 +28,7 @@ use swap_buffer_queue::{
     AsyncSBQueue, SBQueue,
 };
 use tokio::{
-    io::ReadHalf,
+    io::{BufReader, ReadHalf},
     sync::{oneshot, Notify},
 };
 
@@ -106,7 +106,7 @@ impl Connection {
         extensions: Arc<ProtocolExtensions>,
         compression: Option<Compression>,
         compression_min_size: usize,
-        buffer_size: usize,
+        write_buffer_size: usize,
         orphan_count_threshold: usize,
     ) -> Self {
         Self {
@@ -116,7 +116,7 @@ impl Connection {
             compression_min_size,
             ongoing_requests: AtomicUsize::new(0),
             pending_executions: Notify::new(),
-            slice_queue: SBQueue::with_capacity(buffer_size),
+            slice_queue: SBQueue::with_capacity(write_buffer_size),
             vectored_queue: SBQueue::with_capacity(100),
             stream_pool: StreamPool::new(orphan_count_threshold),
         }
@@ -261,6 +261,7 @@ impl Connection {
         &self,
         conn_ref: ConnectionRef,
         connection: TcpConnection,
+        read_buffer_size: usize,
         orphan_count_threshold_delay: Duration,
         stop: oneshot::Receiver<()>,
     ) -> Option<io::Error> {
@@ -270,7 +271,12 @@ impl Connection {
         let write_ref = conn_ref.clone();
         let write_task = tokio::spawn(async move { write_ref.get().write_task(writer).await });
         let read_ref = conn_ref.clone();
-        let read_task = tokio::spawn(async move { read_ref.get().read_task(reader, stop).await });
+        let read_task = tokio::spawn(async move {
+            read_ref
+                .get()
+                .read_task(reader, read_buffer_size, stop)
+                .await
+        });
         let orphan_ref = conn_ref.clone();
         let orphan_task = tokio::spawn(async move {
             orphan_ref
@@ -297,9 +303,11 @@ impl Connection {
 
     async fn read_task(
         &self,
-        mut reader: ReadHalf<TcpConnection>,
+        reader: ReadHalf<TcpConnection>,
+        buffer_size: usize,
         stop: oneshot::Receiver<()>,
     ) -> io::Result<()> {
+        let mut reader = BufReader::with_capacity(buffer_size, reader);
         let callback = |env: Envelope| {
             self.stream_pool
                 .set_response(env.stream, Ok(env))

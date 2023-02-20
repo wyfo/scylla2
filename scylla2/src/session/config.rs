@@ -151,12 +151,6 @@ impl SessionConfig {
         self
     }
 
-    pub fn connection_buffer_size(mut self, buffer_size: usize) -> Self {
-        self.connection_local = self.connection_local.buffer_size(buffer_size);
-        self.connection_remote = self.connection_remote.buffer_size(buffer_size);
-        self
-    }
-
     pub fn connection_init_socket(
         mut self,
         socket_config: impl InitSocket + Clone + 'static,
@@ -169,6 +163,12 @@ impl SessionConfig {
     pub fn connection_pool_size(mut self, pool_size: PoolSize) -> Self {
         self.connection_local = self.connection_local.pool_size(pool_size);
         self.connection_remote = self.connection_remote.pool_size(pool_size);
+        self
+    }
+
+    pub fn connection_read_buffer_size(mut self, size: usize) -> Self {
+        self.connection_local = self.connection_local.read_buffer_size(size);
+        self.connection_remote = self.connection_remote.read_buffer_size(size);
         self
     }
 
@@ -203,6 +203,12 @@ impl SessionConfig {
     pub fn connection_retry_interval(mut self, retry_interval: Duration) -> Self {
         self.connection_local = self.connection_local.retry_interval(retry_interval);
         self.connection_remote = self.connection_remote.retry_interval(retry_interval);
+        self
+    }
+
+    pub fn connection_write_buffer_size(mut self, size: usize) -> Self {
+        self.connection_local = self.connection_local.write_buffer_size(size);
+        self.connection_remote = self.connection_remote.write_buffer_size(size);
         self
     }
 

@@ -55,7 +55,6 @@ impl Default for PoolSize {
 pub(crate) struct NodeConfig {
     pub(crate) address_translator: Arc<dyn AddressTranslator>,
     pub(crate) authentication_protocol: Option<Arc<dyn AuthenticationProtocol>>,
-    pub(crate) buffer_size: usize,
     pub(crate) compression_min_size: usize,
     pub(crate) connect_timeout: Duration,
     pub(crate) init_socket: Box<dyn InitSocket>,
@@ -63,10 +62,12 @@ pub(crate) struct NodeConfig {
     pub(crate) minimal_protocol_version: Option<ProtocolVersion>,
     pub(crate) orphan_count_threshold: usize,
     pub(crate) orphan_count_threshold_delay: Duration,
+    pub(crate) read_buffer_size: usize,
     pub(crate) reconnection_policy: Box<dyn ReconnectionPolicy>,
     #[cfg(feature = "ssl")]
     pub(crate) ssl_context: Option<openssl::ssl::SslContext>,
     pub(crate) startup_options: Arc<HashMap<String, String>>,
+    pub(crate) write_buffer_size: usize,
 }
 
 impl NodeConfig {
@@ -105,7 +106,7 @@ impl ConnectionPool {
                     extensions.clone(),
                     config.compression(),
                     config.compression_min_size,
-                    config.buffer_size,
+                    config.write_buffer_size,
                     config.orphan_count_threshold,
                 )
             })

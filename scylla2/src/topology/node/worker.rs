@@ -253,6 +253,7 @@ impl NodeWorker {
                 conn_index,
                 shard as u16,
                 conn,
+                self.config.read_buffer_size,
                 self.config.orphan_count_threshold_delay,
                 rx,
                 self.node.session_events.clone(),
@@ -270,6 +271,7 @@ async fn start_connection(
     index: usize,
     shard: u16,
     connection: TcpConnection,
+    read_buffer_size: usize,
     orphan_count_threshold_delay: Duration,
     stop: oneshot::Receiver<()>,
     session_events: mpsc::UnboundedSender<SessionEvent>,
@@ -308,7 +310,13 @@ async fn start_connection(
     let error = conn_ref
         .clone()
         .get()
-        .task(conn_ref, connection, orphan_count_threshold_delay, stop)
+        .task(
+            conn_ref,
+            connection,
+            read_buffer_size,
+            orphan_count_threshold_delay,
+            stop,
+        )
         .await;
     loop {
         if conn_count < 0 {

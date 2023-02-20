@@ -112,7 +112,6 @@ impl Session {
             Arc::new(NodeConfig {
                 address_translator: config.address_translator.clone(),
                 authentication_protocol: authentication_protocol.clone(),
-                buffer_size: conn_cfg.buffer_size,
                 compression_min_size: config.compression_minimal_size,
                 connect_timeout: conn_cfg.connect_timeout,
                 init_socket: conn_cfg.init_socket,
@@ -120,10 +119,12 @@ impl Session {
                 minimal_protocol_version: config.minimal_protocol_version,
                 orphan_count_threshold: config.orphan_count_threshold,
                 orphan_count_threshold_delay: config.orphan_count_threshold_delay,
+                read_buffer_size: conn_cfg.read_buffer_size,
                 reconnection_policy: conn_cfg.reconnection_policy,
                 #[cfg(feature = "ssl")]
                 ssl_context: config.ssl_context.clone(),
                 startup_options: startup_options.clone(),
+                write_buffer_size: conn_cfg.write_buffer_size,
             })
         };
         let node_config_local = node_config(config.connection_local);
@@ -518,7 +519,9 @@ impl Session {
             return ring.clone();
         }
         drop(cache);
+        let start = Instant::now();
         let ring = Ring::new(self.0.topology.load().nodes(), strategy);
+        println!("elapsed {:?}", start.elapsed());
         let ring = Arc::new(ArcSwap::from_pointee(ring));
         let mut cache = self.0.ring_cache.write().unwrap();
         cache.insert(strategy.clone(), ring.clone());

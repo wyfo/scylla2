@@ -8,20 +8,20 @@ use crate::topology::node::PoolSize;
 #[derivative(Debug)]
 #[non_exhaustive]
 pub struct ConnectionConfig {
-    pub buffer_size: usize,
     pub connect_timeout: Duration,
     pub heartbeat_interval: Option<Duration>,
     #[derivative(Debug = "ignore")]
     pub init_socket: Box<dyn InitSocket>,
     pub pool_size: PoolSize,
+    pub read_buffer_size: usize,
     #[derivative(Debug = "ignore")]
     pub reconnection_policy: Box<dyn ReconnectionPolicy>,
+    pub write_buffer_size: usize,
 }
 
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
-            buffer_size: 1 << 13,
             connect_timeout: Duration::from_secs(5),
             heartbeat_interval: None,
             init_socket: Box::new(|socket: &mut Socket| -> io::Result<()> {
@@ -30,7 +30,9 @@ impl Default for ConnectionConfig {
                 Ok(())
             }),
             pool_size: PoolSize::default(),
+            read_buffer_size: 8 * 1024,
             reconnection_policy: Box::new(|| iter::repeat(Duration::from_secs(1))),
+            write_buffer_size: 8 * 1024,
         }
     }
 }
@@ -38,11 +40,6 @@ impl Default for ConnectionConfig {
 impl ConnectionConfig {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn buffer_size(mut self, buffer_size: usize) -> Self {
-        self.buffer_size = buffer_size;
-        self
     }
 
     pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
@@ -57,6 +54,11 @@ impl ConnectionConfig {
 
     pub fn pool_size(mut self, pool_size: PoolSize) -> Self {
         self.pool_size = pool_size;
+        self
+    }
+
+    pub fn read_buffer_size(mut self, size: usize) -> Self {
+        self.read_buffer_size = size;
         self
     }
 
@@ -85,6 +87,11 @@ impl ConnectionConfig {
 
     pub fn retry_interval(self, interval: Duration) -> Self {
         self.reconnection_policy(move || iter::repeat(interval))
+    }
+
+    pub fn write_buffer_size(mut self, size: usize) -> Self {
+        self.write_buffer_size = size;
+        self
     }
 }
 
