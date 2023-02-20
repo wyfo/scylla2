@@ -69,6 +69,7 @@ struct PartitionOffsets {
     all: Range<usize>,
 }
 
+#[derive(Debug)]
 struct HashableNode<'a>(&'a Arc<Node>);
 
 impl PartialEq for HashableNode<'_> {
@@ -161,7 +162,7 @@ impl Ring {
         let mut local_ranges = HashMap::new();
         let mut remote_ranges = HashMap::new();
         let mut all_ranges = HashMap::new();
-        for (nodes, tokens) in combinations {
+        for (nodes, tokens) in dbg!(combinations) {
             let range_by_distance =
                 |dist: Option<NodeDistance>,
                  combinations: &mut Vec<Arc<Node>>,
@@ -198,11 +199,11 @@ impl Ring {
                 &mut remote_ranges,
             );
             let all = range_by_distance(None, &mut all_combinations, &mut all_ranges);
-            let node_position: HashMap<HashableNode, usize> = all_combinations[all.clone()]
+            let node_position: HashMap<HashableNode, usize> = dbg!(all_combinations[all.clone()]
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (HashableNode(n), i))
-                .collect();
+                .collect());
             for token in tokens {
                 partitions.insert(
                     token,
@@ -288,7 +289,7 @@ fn network_topology_combinations<'a>(
                 continue;
             }
             let rack = node.peer().rack.as_deref();
-            if racks.contains(&rack) {
+            if !racks.contains(&rack) {
                 racks.insert(rack);
                 dc_nodes.insert(HashableNode(node));
             } else if acceptable_repeats[dc] > 0 {
