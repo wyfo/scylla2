@@ -14,17 +14,22 @@ use crate::{
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ReplicationStrategy {
-    SimpleStrategy {
+    Local,
+    Simple {
         replication_factor: usize,
     },
-    NetworkTopologyStrategy {
+    NetworkTopology {
         datacenters: BTreeMap<String, usize>,
+    },
+    Other {
+        class: String,
+        data: BTreeMap<String, String>,
     },
 }
 
 impl Default for ReplicationStrategy {
     fn default() -> Self {
-        Self::SimpleStrategy {
+        Self::Simple {
             replication_factor: 1,
         }
     }
@@ -40,15 +45,18 @@ impl ReplicationStrategy {
                 .into_iter()
                 .map(|(dc, rf)| Ok((dc, rf.parse()?)))
                 .collect::<Result<_, BoxedError>>()?;
-            Ok(ReplicationStrategy::NetworkTopologyStrategy { datacenters })
+            Ok(ReplicationStrategy::NetworkTopology { datacenters })
         } else if class.ends_with("SimpleStrategy") {
             let replication_factor = replication
                 .get("replication_factor")
                 .ok_or("Missing replication_factor")?
                 .parse()?;
-            Ok(ReplicationStrategy::SimpleStrategy { replication_factor })
+            Ok(ReplicationStrategy::Simple { replication_factor })
+        } else if class.ends_with("LocalStrategy") {
+            Ok(ReplicationStrategy::Local)
         } else {
-            Err("Invalid replication class".into())
+            let data = replication.into_iter().collect();
+            Ok(ReplicationStrategy::Other { class, data })
         }
     }
 }
@@ -59,32 +67,6 @@ struct PartitionOffsets {
     local: Range<usize>,
     remote: Range<usize>,
     all: Range<usize>,
-}
-
-#[derive(Debug)]
-pub struct Ring {
-    partitions: BTreeMap<Token, PartitionOffsets>,
-    local_combinations: Vec<Arc<Node>>,
-    remote_combinations: Vec<Arc<Node>>,
-    all_combinations: Vec<Arc<Node>>,
-}
-
-impl Ring {
-    pub fn get_partition(self: Arc<Self>, token: Token) -> Partition {
-        let offsets = self
-            .partitions
-            .range(token..)
-            .next()
-            .map(|(_, c)| c)
-            .or_else(|| self.partitions.values().next())
-            .unwrap()
-            .clone();
-        Partition {
-            token,
-            ring: self,
-            offsets,
-        }
-    }
 }
 
 struct HashableNode<'a>(&'a Arc<Node>);
@@ -147,64 +129,30 @@ impl Partition {
     }
 }
 
+#[derive(Debug)]
+pub struct Ring {
+    partitions: BTreeMap<Token, PartitionOffsets>,
+    local_combinations: Vec<Arc<Node>>,
+    remote_combinations: Vec<Arc<Node>>,
+    all_combinations: Vec<Arc<Node>>,
+}
+
 impl Ring {
     pub(crate) fn new(nodes: &[Arc<Node>], strategy: &ReplicationStrategy) -> Self {
         let token_ring: BTreeMap<_, _> = nodes
             .iter()
-            .flat_map(|node| node.peer().tokens.iter().map(move |tk| (*tk, node.clone())))
+            .flat_map(|node| node.peer().tokens.iter().map(move |tk| (*tk, node)))
             .collect();
         let mut combinations: HashMap<BTreeSet<HashableNode>, Vec<Token>> = HashMap::new();
         match strategy {
-            ReplicationStrategy::SimpleStrategy { replication_factor } => {
-                for token in token_ring.keys().cloned() {
-                    let mut combination = BTreeSet::new();
-                    for (_, node) in token_ring.range(token..).chain(token_ring.range(..token)) {
-                        combination.insert(HashableNode(node));
-                        if combination.len() == *replication_factor {
-                            break;
-                        }
-                    }
-                    combinations.entry(combination).or_default().push(token);
-                }
+            ReplicationStrategy::Simple { replication_factor } => {
+                simple_combinations(&token_ring, *replication_factor, &mut combinations);
             }
-            ReplicationStrategy::NetworkTopologyStrategy { datacenters } => {
-                let all_racks: HashMap<&str, HashSet<&str>> = nodes
-                    .iter()
-                    .filter_map(|n| {
-                        Some((n.peer().datacenter.as_deref()?, n.peer().rack.as_deref()?))
-                    })
-                    .fold(HashMap::new(), |mut map, (dc, rack)| {
-                        map.entry(dc).or_default().insert(rack);
-                        map
-                    });
-                let acceptable_repeats: HashMap<_, _> = datacenters
-                    .iter()
-                    .map(|(dc, rf)| (dc.as_str(), rf.saturating_sub(all_racks[dc.as_str()].len())))
-                    .collect();
-                for token in token_ring.keys().cloned() {
-                    let mut acceptable_repeats = acceptable_repeats.clone();
-                    let mut racks: HashSet<Option<&str>> = HashSet::new();
-                    let mut by_datacenter: BTreeMap<&str, BTreeSet<_>> = BTreeMap::new();
-                    for (_, node) in token_ring.range(token..).chain(token_ring.range(..token)) {
-                        let Some(dc) = node.peer().datacenter.as_deref() else {continue};
-                        let Some(&rf) = datacenters.get(dc) else {continue};
-                        let dc_nodes = by_datacenter.entry(dc).or_default();
-                        if dc_nodes.len() == rf {
-                            continue;
-                        }
-                        let rack = node.peer().rack.as_deref();
-                        if racks.contains(&rack) {
-                            racks.insert(rack);
-                            dc_nodes.insert(HashableNode(node));
-                        } else if acceptable_repeats[dc] > 0 {
-                            *acceptable_repeats.get_mut(dc).unwrap() -= 1;
-                            dc_nodes.insert(HashableNode(node));
-                        }
-                    }
-                    let combination = by_datacenter.into_values().flatten().collect();
-                    combinations.entry(combination).or_default().push(token);
-                }
+            ReplicationStrategy::NetworkTopology { datacenters } => {
+                network_topology_combinations(nodes, &token_ring, datacenters, &mut combinations);
             }
+            // Default to LocalStrategy/SimpleStrategy(RF=1)
+            _ => simple_combinations(&token_ring, 1, &mut combinations),
         }
         let mut partitions = BTreeMap::new();
         let mut local_combinations = Vec::new();
@@ -275,5 +223,80 @@ impl Ring {
             remote_combinations,
             all_combinations,
         }
+    }
+
+    pub fn get_partition(self: Arc<Self>, token: Token) -> Partition {
+        let offsets = self
+            .partitions
+            .range(token..)
+            .next()
+            .map(|(_, c)| c)
+            .or_else(|| self.partitions.values().next())
+            .unwrap()
+            .clone();
+        Partition {
+            token,
+            ring: self,
+            offsets,
+        }
+    }
+}
+
+fn simple_combinations<'a>(
+    token_ring: &BTreeMap<Token, &'a Arc<Node>>,
+    replication_factor: usize,
+    combinations: &mut HashMap<BTreeSet<HashableNode<'a>>, Vec<Token>>,
+) {
+    for token in token_ring.keys().cloned() {
+        let mut combination = BTreeSet::new();
+        for (_, node) in token_ring.range(token..).chain(token_ring.range(..token)) {
+            combination.insert(HashableNode(node));
+            if combination.len() == replication_factor {
+                break;
+            }
+        }
+        combinations.entry(combination).or_default().push(token);
+    }
+}
+
+fn network_topology_combinations<'a>(
+    nodes: &[Arc<Node>],
+    token_ring: &BTreeMap<Token, &'a Arc<Node>>,
+    datacenters: &BTreeMap<String, usize>,
+    combinations: &mut HashMap<BTreeSet<HashableNode<'a>>, Vec<Token>>,
+) {
+    let all_racks: HashMap<&str, HashSet<&str>> = nodes
+        .iter()
+        .filter_map(|n| Some((n.peer().datacenter.as_deref()?, n.peer().rack.as_deref()?)))
+        .fold(HashMap::new(), |mut map, (dc, rack)| {
+            map.entry(dc).or_default().insert(rack);
+            map
+        });
+    let acceptable_repeats: HashMap<_, _> = datacenters
+        .iter()
+        .map(|(dc, rf)| (dc.as_str(), rf.saturating_sub(all_racks[dc.as_str()].len())))
+        .collect();
+    for token in token_ring.keys().cloned() {
+        let mut acceptable_repeats = acceptable_repeats.clone();
+        let mut racks: HashSet<Option<&str>> = HashSet::new();
+        let mut by_datacenter: BTreeMap<&str, BTreeSet<_>> = BTreeMap::new();
+        for (_, node) in token_ring.range(token..).chain(token_ring.range(..token)) {
+            let Some(dc) = node.peer().datacenter.as_deref() else {continue};
+            let Some(&rf) = datacenters.get(dc) else {continue};
+            let dc_nodes = by_datacenter.entry(dc).or_default();
+            if dc_nodes.len() == rf {
+                continue;
+            }
+            let rack = node.peer().rack.as_deref();
+            if racks.contains(&rack) {
+                racks.insert(rack);
+                dc_nodes.insert(HashableNode(node));
+            } else if acceptable_repeats[dc] > 0 {
+                *acceptable_repeats.get_mut(dc).unwrap() -= 1;
+                dc_nodes.insert(HashableNode(node));
+            }
+        }
+        let combination = by_datacenter.into_values().flatten().collect();
+        combinations.entry(combination).or_default().push(token);
     }
 }
