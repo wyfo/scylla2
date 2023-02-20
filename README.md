@@ -46,9 +46,11 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 
 ## Performance
 
-I'm not able to measure performance right now (I have to finish connection pool worker), but assuming what is written in [previous section](#main-differences-with-the-official-driver), especially the zero/one allocation promise, I expect this implementation to be a lot faster.
+I've started some benchmark using https://github.com/pkolaczk/latte, and the results are disturbing. 
 
-However, the performance improvement regarding zero-copy deserialization has been quickly measured in https://github.com/scylladb/scylla-rust-driver/issues/571, and this point alone is already quite promising.
+As expected, this driver is well optimized and performs better than the official one, but not by a large margin. However, a considerable part of the execution time is taken by write system calls (not the case for the official driver). It seems that the driver is in fact too fast (*swap-buffer-queue* especially), and doesn't buffer writes enough – even with the addition of a `tokio::task::yield_now` loop. So, too slow because of too fast for now.
+
+Fun fact, with similar execution time, this driver will consume at least 33% less CPU time, so again, it's well optimized.
 
 ## What's next
 
