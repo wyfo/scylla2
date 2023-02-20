@@ -162,12 +162,13 @@ pub struct Node {
 impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Node")
-            .field("peer", &self.peer)
+            .field("rpc_address", &self.peer.rpc_address)
+            .field("datacenter", &self.peer.datacenter)
+            .field("rack", &self.peer.rack)
             .field("distance", &self.distance)
             .field("status", &self.status())
-            .field("connections", &self.connections())
-            .field("sharder", &self.sharder())
-            .field("round_robin", &self.round_robin)
+            .field("protocol_version", &self.protocol_version())
+            .field("protocol_extensions", &self.protocol_extensions())
             .finish()
     }
 }

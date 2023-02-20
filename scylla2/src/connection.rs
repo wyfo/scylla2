@@ -64,6 +64,7 @@ impl fmt::Debug for Connection {
             .field("version", &self.version)
             .field("extensions", &self.extensions)
             .field("compression", &self.compression)
+            .field("buffer_size", &self.slice_queue.capacity())
             .field("closed", &self.is_closed())
             .finish()
     }
