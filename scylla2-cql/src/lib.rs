@@ -13,7 +13,6 @@ pub mod error;
 pub mod event;
 pub mod extensions;
 pub mod frame;
-pub mod options;
 #[cfg(feature = "protocol")]
 pub mod protocol;
 pub mod request;

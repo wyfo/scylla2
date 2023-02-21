@@ -12,6 +12,7 @@ pub enum EventType {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Event {
     TopologyChange(TopologyChangeEvent),
     StatusChange(StatusChangeEvent),
@@ -51,6 +52,7 @@ impl Event {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum TopologyChangeEvent {
     NewNode(SocketAddr),
     RemovedNode(SocketAddr),
@@ -74,6 +76,7 @@ impl TopologyChangeEvent {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum StatusChangeEvent {
     Up(SocketAddr),
     Down(SocketAddr),
@@ -141,6 +144,7 @@ impl SchemaChangeEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, strum::EnumString)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum SchemaChangeType {
     Created,
     Updated,
@@ -148,6 +152,7 @@ pub enum SchemaChangeType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum SchemaChangeKind {
     Keyspace,
     Table {

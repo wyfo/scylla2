@@ -5,6 +5,7 @@ use crate::utils::invalid_data;
 
 #[derive(Debug, Copy, Clone, strum::Display, strum::EnumString)]
 #[strum(serialize_all = "lowercase")]
+#[non_exhaustive]
 pub enum Compression {
     #[cfg(feature = "lz4")]
     Lz4,

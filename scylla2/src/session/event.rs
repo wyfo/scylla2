@@ -14,6 +14,7 @@ use crate::{
 #[derive(Debug, Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(SessionEventType))]
 #[strum_discriminants(derive(Hash))]
+#[non_exhaustive]
 pub enum SessionEvent {
     AddressTranslationFailed {
         rpc_address: IpAddr,

@@ -133,6 +133,7 @@ const EXTENSIONS_CHANGED: isize = -5;
 const SESSION_CLOSED: isize = -6;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum NodeDisconnectionReason {
     Removed,
     PeerChanged,

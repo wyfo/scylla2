@@ -117,6 +117,7 @@ fn fmix(mut k: Wrapping<i64>) -> Wrapping<i64> {
 }
 
 #[derive(Debug, Default, Clone)]
+#[non_exhaustive]
 pub enum Partitioner {
     #[default]
     Murmur3,

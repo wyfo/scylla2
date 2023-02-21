@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum ReplicationStrategy {
+pub(crate) enum ReplicationStrategy {
     Local,
     Simple {
         replication_factor: usize,
