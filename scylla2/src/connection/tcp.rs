@@ -29,17 +29,23 @@ pub(crate) enum TcpConnection {
 
 impl TcpConnection {
     async fn new(
-        addr: SocketAddr,
+        mut address: SocketAddr,
         shard: Option<ShardInfo>, // shard != None assumes that node port is shard-aware
         init_socket: &dyn InitSocket,
         #[cfg(feature = "ssl")] ssl_context: Option<&openssl::ssl::SslContext>,
     ) -> io::Result<Self> {
-        let mut socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+        // let addr = shard.map_or(addr)
+        let mut socket = Socket::new(
+            Domain::for_address(address),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
         init_socket.initialize_socket(&mut socket)?;
         socket.set_nonblocking(true)?;
         let socket = TcpSocket::from_std_stream(socket.into());
         if let Some(shard) = shard {
-            let ip_zero = match addr.ip() {
+            address.set_port(shard.shard_aware_port);
+            let ip_zero = match address.ip() {
                 IpAddr::V4(_) => IpAddr::from([0; 4]),
                 IpAddr::V6(_) => IpAddr::from([0; 16]),
             };
@@ -56,7 +62,7 @@ impl TcpConnection {
                 }
             }
         }
-        let stream = socket.connect(addr).await?;
+        let stream = socket.connect(address).await?;
         #[cfg(feature = "ssl")]
         if let Some(ctx) = ssl_context {
             let ssl = openssl::ssl::Ssl::new(ctx)?;
@@ -72,7 +78,7 @@ impl TcpConnection {
 
     pub(crate) async fn open(
         address: SocketAddr,
-        shard: Option<ShardInfo>, // shard != None assumes that node port is shard-aware
+        shard: Option<ShardInfo>,
         init_socket: &dyn InitSocket,
         #[cfg(feature = "ssl")] ssl_context: Option<&openssl::ssl::SslContext>,
         timeout: Duration,

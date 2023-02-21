@@ -9,6 +9,7 @@ use crate::topology::partitioner::Token;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) struct ShardInfo {
+    pub(crate) shard_aware_port: u16,
     pub(crate) nr_shards: NonZeroU16,
     pub(crate) shard: u16,
 }
@@ -26,7 +27,7 @@ impl ShardInfo {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum ShardingAlgorithm {
     BiasedTokenRoundRobin { ignore_msb: u8 },
 }
@@ -43,8 +44,8 @@ impl ShardingAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Sharder {
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub(crate) struct Sharder {
     nr_shards: NonZeroU16,
     algorithm: ShardingAlgorithm,
 }

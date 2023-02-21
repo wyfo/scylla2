@@ -181,8 +181,10 @@ where
         if let Some(next) = self.iter.next() {
             self.last = Some(next.clone());
             Some(next)
-        } else {
+        } else if self.last.is_some() {
             self.last.clone()
+        } else {
+            panic!("Empty iterator");
         }
     }
 }

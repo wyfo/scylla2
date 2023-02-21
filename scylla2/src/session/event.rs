@@ -1,8 +1,4 @@
-use std::{
-    io,
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-};
+use std::{io, net::IpAddr, sync::Arc};
 
 use scylla2_cql::error::BoxedError;
 use uuid::Uuid;
@@ -52,7 +48,6 @@ pub enum SessionEvent {
     },
     NodeAddressUpdate {
         node: Arc<Node>,
-        address: SocketAddr,
     },
     NodeStatusUpdate {
         node: Arc<Node>,

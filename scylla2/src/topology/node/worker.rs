@@ -1,8 +1,6 @@
 use std::{
-    net::SocketAddr,
     ops::Deref,
     sync::{atomic::Ordering, Arc},
-    time::Duration,
 };
 
 use scylla2_cql::{
@@ -18,7 +16,7 @@ use crate::{
     statement::query::cql_query,
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason, NodeStatus},
-        peer::{AddressTranslatorExt, ShardAwarePort},
+        peer::ShardAwarePort,
         sharding::{ShardInfo, Sharder},
     },
     utils::RepeatLast,
@@ -29,6 +27,7 @@ const EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER: usize = 10;
 
 pub(super) struct NodeWorker {
     node: Arc<Node>,
+    shard_aware_port: Option<u16>,
     opened_connection_count: usize,
     opened_connections: Vec<Vec<TcpConnection>>,
     used_connections: Vec<Option<oneshot::Sender<()>>>,
@@ -52,6 +51,7 @@ impl NodeWorker {
         let (connection_request_tx, connection_request_rx) = mpsc::channel(connection_count);
         Self {
             node,
+            shard_aware_port: None,
             opened_connection_count: 0,
             opened_connections: (0..nr_shards).map(|_| Default::default()).collect(),
             used_connections: (0..connection_count).map(|_| Default::default()).collect(),
@@ -63,51 +63,16 @@ impl NodeWorker {
         }
     }
 
-    fn parse_supported(
-        &self,
-        supported: Supported,
-        shard_aware_port: &mut Option<u16>,
-    ) -> Result<usize, Disconnected> {
-        if Sharder::from_supported(&supported).as_ref() != self.node.sharder() {
-            self.node
-                .clone()
-                .acknowledge_disconnection(NodeDisconnectionReason::ShardingChanged);
-            return Err(Disconnected);
-        }
-        if &ProtocolExtensions::from_supported(&supported)
-            != self.node.protocol_extensions().unwrap()
-        {
-            self.node
-                .clone()
-                .acknowledge_disconnection(NodeDisconnectionReason::ExtensionsChanged);
-            return Err(Disconnected);
-        }
-        *shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT");
-        #[cfg(feature = "ssl")]
-        if self.config.ssl_context.is_some() {
-            *shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT_SSL");
-        }
-        Ok(self
-            .node
-            .sharder()
-            .and_then(|_| supported.get("SCYLLA_SHARD"))
-            .unwrap_or(0))
-    }
-
     pub(super) async fn run(
         mut self,
-        init_conn: TcpConnection,
+        conn: TcpConnection,
         supported: Supported,
-        mut address: SocketAddr,
-        mut translated_shard_aware_port: Option<ShardAwarePort>,
     ) -> Result<(), Disconnected> {
-        let mut supported_shard_aware_port = None;
-        let init_shard = self.parse_supported(supported, &mut supported_shard_aware_port)?;
-        self.push(init_shard, init_conn);
+        self.add_connection(conn, supported)?;
         for i in 0..self.used_connections.len() {
             self.connection_request_tx.send(i).await.unwrap();
         }
-        'request: loop {
+        loop {
             let conn_index = loop {
                 tokio::select! {
                     biased;
@@ -122,83 +87,95 @@ impl NodeWorker {
             if self.try_start(conn_index).await {
                 continue;
             }
-            for delay in RepeatLast::new(self.config.reconnection_policy.reconnection_delays()) {
-                let (addr_with_port, shard_info) = match (
-                    self.node.sharder(),
-                    translated_shard_aware_port,
-                    supported_shard_aware_port,
-                ) {
-                    (Some(sharder), None, Some(port))
-                    | (Some(sharder), Some(ShardAwarePort::Port(port)), _) => (
-                        (address.ip(), port).into(),
-                        Some(ShardInfo {
-                            nr_shards: sharder.nr_shards(),
-                            shard: self.shard(conn_index) as u16,
-                        }),
-                    ),
-                    _ => (address, None),
-                };
-                match TcpConnection::open(
-                    addr_with_port,
-                    shard_info,
-                    self.config.init_socket.as_ref(),
-                    #[cfg(feature = "ssl")]
-                    self.config.ssl_context.as_ref(),
-                    self.config.connect_timeout,
-                    self.node.protocol_version().unwrap(),
-                )
-                .await
-                {
-                    Ok((conn, supported)) => {
-                        let shard =
-                            self.parse_supported(supported, &mut supported_shard_aware_port)?;
-                        self.push(shard, conn);
-                        if self.try_start(conn_index).await {
-                            continue 'request;
-                        }
-                    }
-                    Err(err) => {
-                        let event = SessionEvent::ConnectionFailed {
-                            node: self.node.clone(),
-                            error: Arc::new(err),
-                        };
-                        self.node.session_events.send(event).ok();
-                    }
-                }
-                tokio::select! {
-                    Some(Some(reason)) = self.connection_rx.recv() => {
-                        self.node.acknowledge_disconnection(reason);
-                        return Err(Disconnected)
-                    }
-                    _= tokio::time::sleep(delay) => {}
-                    else => {}  // else can only be Some(None) = connection_rx.recv()
-                }
-                let translated = self
-                    .config
-                    .address_translator
-                    .translate_or_warn(self.node.peer.rpc_address, &self.node.session_events)
-                    .await;
-                if let Ok((addr, shard_aware_port)) = translated {
-                    if addr != address {
-                        let event = SessionEvent::NodeAddressUpdate {
-                            node: self.node.clone(),
-                            address,
-                        };
-                        self.node.session_events.send(event).ok();
-                    }
-                    address = addr;
-                    translated_shard_aware_port = shard_aware_port;
+            loop {
+                let (conn, supported) = self.open_connection(self.shard(conn_index) as u16).await?;
+                self.add_connection(conn, supported)?;
+                if self.try_start(conn_index).await {
+                    break;
                 }
             }
         }
     }
 
-    fn shard(&self, conn_index: usize) -> usize {
-        let conn_per_shard = self.used_connections.len() / self.opened_connections.len();
-        conn_index / conn_per_shard
+    async fn open_connection(
+        &mut self,
+        shard: u16,
+    ) -> Result<(TcpConnection, Supported), Disconnected> {
+        for delay in RepeatLast::new(self.config.reconnection_policy.reconnection_delays()) {
+            let (address, shard_aware_port) = self.node.address.lock().unwrap().unwrap();
+            let shard_info = match (self.node.sharder(), shard_aware_port, self.shard_aware_port) {
+                (Some(sharder), Some(ShardAwarePort::Port(port)), _)
+                | (Some(sharder), None, Some(port)) => Some(ShardInfo {
+                    shard_aware_port: port,
+                    nr_shards: sharder.nr_shards(),
+                    shard,
+                }),
+                _ => None,
+            };
+            match TcpConnection::open(
+                address,
+                shard_info,
+                self.config.init_socket.as_ref(),
+                #[cfg(feature = "ssl")]
+                self.config.ssl_context.as_ref(),
+                self.config.connect_timeout,
+                self.node.protocol_version().unwrap(),
+            )
+            .await
+            {
+                Ok(conn) => return Ok(conn),
+                Err(err) => {
+                    let event = SessionEvent::ConnectionFailed {
+                        node: self.node.clone(),
+                        error: Arc::new(err),
+                    };
+                    self.node.session_events.send(event).ok();
+                }
+            }
+            tokio::select! {
+                Some(Some(reason)) = self.connection_rx.recv() => {
+                    self.node.acknowledge_disconnection(reason);
+                    return Err(Disconnected)
+                }
+                _= tokio::time::sleep(delay) => {}
+                else => {}  // else can only be Some(None) = connection_rx.recv()
+            }
+            self.node
+                .update_address(self.config.address_translator.as_ref())
+                .await;
+        }
+        unreachable!()
     }
 
-    fn push(&mut self, shard: usize, conn: TcpConnection) {
+    fn add_connection(
+        &mut self,
+        conn: TcpConnection,
+        supported: Supported,
+    ) -> Result<(), Disconnected> {
+        if Sharder::from_supported(&supported).as_ref() != self.node.sharder() {
+            self.node
+                .clone()
+                .acknowledge_disconnection(NodeDisconnectionReason::ShardingChanged);
+            return Err(Disconnected);
+        }
+        if &ProtocolExtensions::from_supported(&supported)
+            != self.node.protocol_extensions().unwrap()
+        {
+            self.node
+                .clone()
+                .acknowledge_disconnection(NodeDisconnectionReason::ExtensionsChanged);
+            return Err(Disconnected);
+        }
+        self.shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT");
+        #[cfg(feature = "ssl")]
+        if self.config.ssl_context.is_some() {
+            self.shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT_SSL");
+        }
+        let shard = self
+            .node
+            .sharder()
+            .and_then(|_| supported.get("SCYLLA_SHARD"))
+            .unwrap_or(0);
         if shard > self.opened_connections.len() {
             #[cfg(feature = "tracing")]
             tracing::error!(
@@ -206,7 +183,7 @@ impl NodeWorker {
                 nr_shard = self.opened_connections.len(),
                 "Invalid shard returned by Scylla"
             );
-            return;
+            return Ok(());
         }
         if self.opened_connection_count
             > self.opened_connections.len() * EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER
@@ -216,6 +193,12 @@ impl NodeWorker {
         }
         self.opened_connection_count += 1;
         self.opened_connections[shard].push(conn);
+        Ok(())
+    }
+
+    fn shard(&self, conn_index: usize) -> usize {
+        let conn_per_shard = self.used_connections.len() / self.opened_connections.len();
+        conn_index / conn_per_shard
     }
 
     async fn try_start(&mut self, conn_index: usize) -> bool {
@@ -260,10 +243,8 @@ impl NodeWorker {
                 conn_index,
                 shard as u16,
                 conn,
-                self.config.read_buffer_size,
-                self.config.orphan_count_threshold_delay,
+                self.config.clone(),
                 rx,
-                self.node.session_events.clone(),
                 self.connection_request_tx.clone(),
             ));
             return true;
@@ -272,16 +253,13 @@ impl NodeWorker {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn start_connection(
     node: Arc<Node>,
     index: usize,
     shard: u16,
     connection: TcpConnection,
-    read_buffer_size: usize,
-    orphan_count_threshold_delay: Duration,
+    config: Arc<NodeConfig>,
     stop: oneshot::Receiver<()>,
-    session_events: mpsc::UnboundedSender<SessionEvent>,
     connection_request_tx: mpsc::Sender<usize>,
 ) {
     let mut conn_count = node.active_connection_count.load(Ordering::Relaxed);
@@ -304,13 +282,13 @@ async fn start_connection(
         shard,
         index,
     };
-    session_events.send(event).ok();
+    node.session_events.send(event).ok();
     if conn_count == 0 {
         let event = SessionEvent::NodeStatusUpdate {
             node: node.clone(),
             status: NodeStatus::Up,
         };
-        session_events.send(event).ok();
+        node.session_events.send(event).ok();
     }
     node.update_active_connection_count(1);
     let conn_ref = ConnectionRef::new(node.clone(), index);
@@ -320,8 +298,8 @@ async fn start_connection(
         .task(
             conn_ref,
             connection,
-            read_buffer_size,
-            orphan_count_threshold_delay,
+            config.read_buffer_size,
+            config.orphan_count_threshold_delay,
             stop,
         )
         .await;
@@ -350,9 +328,9 @@ async fn start_connection(
             node: node.clone(),
             status: NodeStatus::Down,
         };
-        session_events.send(event).ok();
+        node.session_events.send(event).ok();
     }
 
-    session_events.send(event).ok();
+    node.session_events.send(event).ok();
     connection_request_tx.send(index).await.ok();
 }

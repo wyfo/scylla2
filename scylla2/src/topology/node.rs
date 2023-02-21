@@ -1,11 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    num::NonZeroUsize,
+    net::SocketAddr,
+    num::{NonZeroU16, NonZeroUsize},
     str::FromStr,
     sync::{
         atomic::{AtomicIsize, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -32,7 +33,7 @@ use crate::{
     topology::{
         node::worker::NodeWorker,
         partitioner::Token,
-        peer::{AddressTranslator, AddressTranslatorExt, NodeDistance, Peer},
+        peer::{AddressTranslator, AddressTranslatorExt, NodeDistance, Peer, ShardAwarePort},
         sharding::Sharder,
     },
     utils::RepeatLast,
@@ -78,7 +79,6 @@ impl NodeConfig {
     }
 }
 
-#[derive(Debug)]
 struct ConnectionPool {
     connections: Box<[Connection]>,
     sharder: Option<Sharder>,
@@ -150,6 +150,7 @@ impl From<NodeDisconnectionReason> for NodeStatus {
 }
 
 pub struct Node {
+    address: Mutex<Option<(SocketAddr, Option<ShardAwarePort>)>>,
     peer: Peer,
     distance: NodeDistance,
     active_connection_count: AtomicIsize, // negative means disconnected
@@ -164,6 +165,7 @@ pub struct Node {
 impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Node")
+            .field("address", &self.address())
             .field("rpc_address", &self.peer.rpc_address)
             .field("datacenter", &self.peer.datacenter)
             .field("rack", &self.peer.rack)
@@ -186,6 +188,7 @@ impl Node {
     ) -> Arc<Self> {
         let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let node = Arc::new(Self {
+            address: Mutex::new(None),
             peer,
             distance,
             active_connection_count: AtomicIsize::new(0),
@@ -202,6 +205,10 @@ impl Node {
             tokio::spawn(worker);
         }
         node
+    }
+
+    pub fn address(&self) -> Option<SocketAddr> {
+        self.address.lock().unwrap().map(|addr| addr.0)
     }
 
     pub fn peer(&self) -> &Peer {
@@ -242,8 +249,16 @@ impl Node {
         self.status_notify.notified().await;
     }
 
-    pub fn sharder(&self) -> Option<&Sharder> {
+    fn sharder(&self) -> Option<&Sharder> {
         self.connection_pool.get()?.sharder.as_ref()
+    }
+
+    pub fn nr_shards(&self) -> Option<NonZeroU16> {
+        Some(self.sharder()?.nr_shards())
+    }
+
+    pub fn shard_of(&self, token: Token) -> Option<u16> {
+        Some(self.sharder()?.compute_shard(token))
     }
 
     pub fn connections(&self) -> Option<&[Connection]> {
@@ -333,7 +348,7 @@ impl Node {
         self.connection_tx.send(Some(reason)).ok();
     }
 
-    fn acknowledge_disconnection(self: Arc<Self>, reason: NodeDisconnectionReason) {
+    fn acknowledge_disconnection(self: &Arc<Self>, reason: NodeDisconnectionReason) {
         let disconnected = match reason {
             NodeDisconnectionReason::Removed => REMOVED,
             NodeDisconnectionReason::PeerChanged => PEER_CHANGED,
@@ -367,18 +382,28 @@ impl Node {
         }
     }
 
-    pub(crate) async fn worker(
+    async fn update_address(self: &Arc<Node>, address_translator: &dyn AddressTranslator) {
+        let Some(address) = address_translator.translate_or_warn(self.peer.rpc_address, &self.session_events).await.ok() else {
+            return
+        };
+        let prev_addr = self.address.lock().unwrap().replace(address);
+        if prev_addr.map_or(false, |prev| prev == address) {
+            let event = SessionEvent::NodeAddressUpdate { node: self.clone() };
+            self.session_events.send(event).ok();
+        }
+    }
+
+    async fn worker(
         self: Arc<Self>,
         config: Arc<NodeConfig>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
         mut connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
     ) {
         for delay in RepeatLast::new(config.reconnection_policy.reconnection_delays()) {
-            let translated = config
-                .address_translator
-                .translate_or_warn(self.peer.rpc_address, &self.session_events)
+            self.update_address(config.address_translator.as_ref())
                 .await;
-            if let Ok((address, shard_aware_port)) = translated {
+            let translated = *self.address.lock().unwrap();
+            if let Some((address, _)) = translated {
                 match TcpConnection::open_with_minimal_version(
                     address,
                     None,
@@ -393,20 +418,16 @@ impl Node {
                     Ok((conn, version, supported)) => {
                         let sharder = Sharder::from_supported(&supported);
                         let extensions = ProtocolExtensions::from_supported(&supported);
-                        self.connection_pool
-                            .set(ConnectionPool::new(
-                                config.pool_size,
-                                sharder,
-                                version,
-                                extensions,
-                                &config,
-                            ))
-                            .unwrap();
+                        let pool = ConnectionPool::new(
+                            config.pool_size,
+                            sharder,
+                            version,
+                            extensions,
+                            &config,
+                        );
+                        self.connection_pool.set(pool).ok().unwrap();
                         let worker = NodeWorker::new(self, config, used_keyspace, connection_rx);
-                        worker
-                            .run(conn, supported, address, shard_aware_port)
-                            .await
-                            .ok();
+                        worker.run(conn, supported).await.ok();
                         return;
                     }
                     Err(err) => {
