@@ -1,4 +1,8 @@
-use std::{io, net::IpAddr, sync::Arc};
+use std::{
+    io,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use scylla2_cql::error::BoxedError;
 use uuid::Uuid;
@@ -45,6 +49,10 @@ pub enum SessionEvent {
     ControlConnectionClosed {
         rpc_address: IpAddr,
         error: Option<Arc<io::Error>>,
+    },
+    NodeAddressUpdate {
+        node: Arc<Node>,
+        address: SocketAddr,
     },
     NodeStatusUpdate {
         node: Arc<Node>,

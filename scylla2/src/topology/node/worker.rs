@@ -179,6 +179,13 @@ impl NodeWorker {
                     .translate_or_warn(self.node.peer.rpc_address, &self.node.session_events)
                     .await;
                 if let Ok((addr, shard_aware_port)) = translated {
+                    if addr != address {
+                        let event = SessionEvent::NodeAddressUpdate {
+                            node: self.node.clone(),
+                            address,
+                        };
+                        self.node.session_events.send(event).ok();
+                    }
                     address = addr;
                     translated_shard_aware_port = shard_aware_port;
                 }
