@@ -1,6 +1,7 @@
 #![warn(missing_debug_implementations)]
-#![warn(clippy::semicolon_if_nothing_returned)]
+#![deny(clippy::dbg_macro)]
 #![deny(clippy::map_unwrap_or)]
+#![deny(clippy::semicolon_if_nothing_returned)]
 
 extern crate core;
 

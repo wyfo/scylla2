@@ -519,9 +519,7 @@ impl Session {
             return ring.clone();
         }
         drop(cache);
-        let start = Instant::now();
         let ring = Ring::new(self.0.topology.load().nodes(), strategy);
-        println!("elapsed {:?}", start.elapsed());
         let ring = Arc::new(ArcSwap::from_pointee(ring));
         let mut cache = self.0.ring_cache.write().unwrap();
         cache.insert(strategy.clone(), ring.clone());
