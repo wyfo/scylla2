@@ -7,7 +7,7 @@ use scylla2_cql::response::supported::Supported;
 
 use crate::topology::partitioner::Token;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub(crate) struct ShardInfo {
     pub(crate) shard_aware_port: u16,
     pub(crate) nr_shards: NonZeroU16,
@@ -18,12 +18,14 @@ impl ShardInfo {
     pub(crate) fn shard_aware_source_port(self) -> impl Iterator<Item = u16> {
         static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
         let nr_shards = self.nr_shards.get();
-        let next_sharded_port = |port| port - (port % nr_shards) + self.shard;
-        let offset = next_sharded_port(PORT_OFFSET.fetch_add(nr_shards, Ordering::Relaxed) + 49152);
+        let start = (49152 + nr_shards) / nr_shards * nr_shards;
+        let offset = PORT_OFFSET.fetch_add(1, Ordering::Relaxed) % ((65535 - 49152) / nr_shards);
+        let first_port = start + offset * nr_shards;
         Iterator::chain(
-            (offset..65535).step_by(nr_shards as usize),
-            (next_sharded_port(49152)..offset).step_by(nr_shards as usize),
+            (first_port..65535).step_by(nr_shards as usize),
+            (start..first_port).step_by(nr_shards as usize),
         )
+        .map(move |port| port + self.shard)
     }
 }
 
