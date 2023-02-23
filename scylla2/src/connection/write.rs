@@ -28,10 +28,7 @@ impl Connection {
                 Ok(mut vectored) = self.vectored_queue.dequeue() => {
                     self.write_vectored(&mut writer, &mut vectored).await?;
                 }
-                else => {
-                    writer.shutdown().await.ok();
-                return Ok(());
-                },
+                else => return writer.shutdown().await,
             }
         }
     }

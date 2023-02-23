@@ -33,6 +33,7 @@ pub enum SessionEvent {
         node: Arc<Node>,
         shard: u16,
         index: usize,
+        too_many_orphan_streams: bool,
         error: Option<Arc<io::Error>>,
     },
     ControlConnectionOpened {

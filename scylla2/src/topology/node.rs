@@ -15,7 +15,7 @@ use once_cell::sync::OnceCell;
 use rand::seq::SliceRandom;
 use scylla2_cql::{
     extensions::ProtocolExtensions, frame::compression::Compression,
-    protocol::auth::AuthenticationProtocol, ProtocolVersion,
+    protocol::auth::AuthenticationProtocol, response::supported::Supported, ProtocolVersion,
 };
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ use crate::{
         node::worker::NodeWorker,
         partitioner::Token,
         peer::{AddressTranslator, AddressTranslatorExt, NodeDistance, Peer, ShardAwarePort},
-        sharding::Sharder,
+        sharding::{ShardInfo, Sharder},
     },
     utils::RepeatLast,
 };
@@ -120,21 +120,30 @@ impl ConnectionPool {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum NodeStatus {
-    Up,
+    Up(NonZeroUsize),
     Down,
+    Connecting,
     Disconnected(NodeDisconnectionReason),
 }
 
-const REMOVED: isize = -1;
-const PEER_CHANGED: isize = -2;
-const DISTANCE_CHANGED: isize = -3;
-const SHARDING_CHANGED: isize = -4;
-const EXTENSIONS_CHANGED: isize = -5;
-const SESSION_CLOSED: isize = -6;
+impl NodeStatus {
+    fn up(conn_count: isize) -> Self {
+        Self::Up(NonZeroUsize::new(conn_count as usize).unwrap())
+    }
+}
+
+const IGNORED: isize = -1;
+const REMOVED: isize = -2;
+const PEER_CHANGED: isize = -3;
+const DISTANCE_CHANGED: isize = -4;
+const SHARDING_CHANGED: isize = -5;
+const EXTENSIONS_CHANGED: isize = -6;
+const SESSION_CLOSED: isize = -7;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum NodeDisconnectionReason {
+    Ignored,
     Removed,
     PeerChanged,
     DistanceChanged,
@@ -149,15 +158,21 @@ impl From<NodeDisconnectionReason> for NodeStatus {
     }
 }
 
+enum NodeEvent {
+    Reconnect,
+    Disconnect(NodeDisconnectionReason),
+}
+
 pub struct Node {
     address: Mutex<Option<(SocketAddr, Option<ShardAwarePort>)>>,
     peer: Peer,
     distance: NodeDistance,
     active_connection_count: AtomicIsize, // negative means disconnected
+    pool_size: Option<PoolSize>,
     connection_pool: OnceCell<ConnectionPool>,
     status_notify: Notify,
     session_events: mpsc::UnboundedSender<SessionEvent>,
-    connection_tx: mpsc::UnboundedSender<Option<NodeDisconnectionReason>>,
+    node_events: mpsc::UnboundedSender<NodeEvent>,
     schema_agreement_interval: Duration,
     round_robin: AtomicUsize,
 }
@@ -170,6 +185,8 @@ impl fmt::Debug for Node {
             .field("datacenter", &self.peer.datacenter)
             .field("rack", &self.peer.rack)
             .field("distance", &self.distance)
+            .field("pool_size", &self.pool_size)
+            .field("nr_shards", &self.sharder().map(|s| s.nr_shards()))
             .field("status", &self.status())
             .field("protocol_version", &self.protocol_version())
             .field("protocol_extensions", &self.protocol_extensions())
@@ -186,23 +203,26 @@ impl Node {
         session_events: mpsc::UnboundedSender<SessionEvent>,
         schema_agreement_interval: Duration,
     ) -> Arc<Self> {
-        let (connection_tx, connection_rx) = mpsc::unbounded_channel();
+        let (node_events_tx, node_events_rx) = mpsc::unbounded_channel();
         let node = Arc::new(Self {
             address: Mutex::new(None),
             peer,
             distance,
-            active_connection_count: AtomicIsize::new(0),
+            active_connection_count: AtomicIsize::new(isize::MIN),
+            pool_size: config.as_ref().map(|c| c.pool_size),
             connection_pool: OnceCell::new(),
             status_notify: Notify::new(),
             session_events,
-            connection_tx,
+            node_events: node_events_tx,
             schema_agreement_interval,
             round_robin: AtomicUsize::new(0),
         });
         assert_eq!(matches!(distance, NodeDistance::Ignored), config.is_none());
         if let Some(config) = config {
-            let worker = node.clone().worker(config, used_keyspace, connection_rx);
+            let worker = node.clone().worker(config, used_keyspace, node_events_rx);
             tokio::spawn(worker);
+        } else {
+            node.acknowledge_disconnection(NodeDisconnectionReason::Ignored);
         }
         node
     }
@@ -229,24 +249,33 @@ impl Node {
 
     pub fn status(&self) -> NodeStatus {
         match self.active_connection_count.load(Ordering::Relaxed) {
-            n if n > 0 => NodeStatus::Up,
+            n if n > 0 => NodeStatus::up(n),
             0 => NodeStatus::Down,
+            IGNORED => NodeDisconnectionReason::Ignored.into(),
             REMOVED => NodeDisconnectionReason::Removed.into(),
             PEER_CHANGED => NodeDisconnectionReason::PeerChanged.into(),
             DISTANCE_CHANGED => NodeDisconnectionReason::DistanceChanged.into(),
             SHARDING_CHANGED => NodeDisconnectionReason::ShardingChanged.into(),
             EXTENSIONS_CHANGED => NodeDisconnectionReason::ExtensionsChanged.into(),
             SESSION_CLOSED => NodeDisconnectionReason::SessionClosed.into(),
+            isize::MIN => NodeStatus::Connecting,
             _ => unreachable!(),
         }
     }
 
     pub fn is_up(&self) -> bool {
-        matches!(self.status(), NodeStatus::Up)
+        matches!(self.status(), NodeStatus::Up(_))
     }
 
-    pub async fn wait_status(&self) {
-        self.status_notify.notified().await;
+    pub async fn wait_for_status(&self, predicate: impl Fn(NodeStatus) -> bool) -> NodeStatus {
+        loop {
+            let notified = self.status_notify.notified();
+            let status = self.status();
+            if predicate(status) {
+                return status;
+            }
+            notified.await;
+        }
     }
 
     fn sharder(&self) -> Option<&Sharder> {
@@ -266,7 +295,12 @@ impl Node {
     }
 
     pub fn get_random_connection(&self) -> Option<&Connection> {
-        self.connections()?.choose(&mut rand::thread_rng())
+        loop {
+            let conn = self.connections()?.choose(&mut rand::thread_rng()).unwrap();
+            if !conn.is_closed() {
+                return Some(conn);
+            }
+        }
     }
 
     pub fn get_random_owned_connection(self: &Arc<Self>) -> Option<OwnedConnection> {
@@ -294,7 +328,9 @@ impl Node {
 
     pub fn try_reconnect(&self) -> Result<(), Disconnected> {
         if !self.is_up() {
-            self.connection_tx.send(None).map_err(|_| Disconnected)?;
+            self.node_events
+                .send(NodeEvent::Reconnect)
+                .map_err(|_| Disconnected)?;
         }
         Ok(())
     }
@@ -345,11 +381,21 @@ impl Node {
     }
 
     pub(crate) fn disconnect(&self, reason: NodeDisconnectionReason) {
-        self.connection_tx.send(Some(reason)).ok();
+        self.node_events.send(NodeEvent::Disconnect(reason)).ok();
+    }
+
+    fn update_status(self: &Arc<Self>, status: NodeStatus) {
+        let event = SessionEvent::NodeStatusUpdate {
+            node: self.clone(),
+            status,
+        };
+        self.session_events.send(event).ok();
+        self.status_notify.notify_waiters();
     }
 
     fn acknowledge_disconnection(self: &Arc<Self>, reason: NodeDisconnectionReason) {
         let disconnected = match reason {
+            NodeDisconnectionReason::Ignored => IGNORED,
             NodeDisconnectionReason::Removed => REMOVED,
             NodeDisconnectionReason::PeerChanged => PEER_CHANGED,
             NodeDisconnectionReason::DistanceChanged => DISTANCE_CHANGED,
@@ -359,24 +405,33 @@ impl Node {
         };
         self.active_connection_count
             .store(disconnected, Ordering::Relaxed);
-        let event = SessionEvent::NodeStatusUpdate {
-            node: self.clone(),
-            status: NodeStatus::Disconnected(reason),
-        };
-        self.session_events.send(event).ok();
+        self.update_status(NodeStatus::Disconnected(reason));
     }
 
-    fn update_active_connection_count(&self, update: isize) {
+    fn update_active_connection_count(self: &Arc<Self>, update: isize) {
         assert!(update == 1 || update == -1);
         let mut conn_count = self.active_connection_count.load(Ordering::Relaxed);
-        while (update == 1 && conn_count >= 0) || (update == -1 && conn_count > 1) {
+        while conn_count >= 0 || conn_count == isize::MIN {
+            assert!(update == 1 || conn_count >= 1);
+            let next_count = if conn_count == isize::MIN {
+                1
+            } else {
+                conn_count + update
+            };
             match self.active_connection_count.compare_exchange_weak(
                 conn_count,
-                conn_count + update,
+                next_count,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return,
+                Ok(_) => {
+                    if next_count > 0 {
+                        self.update_status(NodeStatus::up(next_count));
+                    } else {
+                        self.update_status(NodeStatus::Down);
+                    }
+                    return;
+                }
                 Err(c) => conn_count = c,
             }
         }
@@ -397,8 +452,9 @@ impl Node {
         self: Arc<Self>,
         config: Arc<NodeConfig>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-        mut connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
+        mut node_events: mpsc::UnboundedReceiver<NodeEvent>,
     ) {
+        let mut first_connection = true;
         for delay in RepeatLast::new(config.reconnection_policy.reconnection_delays()) {
             self.update_address(config.address_translator.as_ref())
                 .await;
@@ -426,11 +482,15 @@ impl Node {
                             &config,
                         );
                         self.connection_pool.set(pool).ok().unwrap();
-                        let worker = NodeWorker::new(self, config, used_keyspace, connection_rx);
+                        let worker = NodeWorker::new(self, config, used_keyspace, node_events);
                         worker.run(conn, supported).await.ok();
                         return;
                     }
                     Err(err) => {
+                        if first_connection {
+                            first_connection = false;
+                            self.update_status(NodeStatus::Down);
+                        }
                         let event = SessionEvent::ConnectionFailed {
                             node: self.clone(),
                             error: Arc::new(err),
@@ -440,12 +500,65 @@ impl Node {
                 }
             }
             tokio::select! {
-                Some(Some(reason)) = connection_rx.recv() => {
+                Some(NodeEvent::Disconnect(reason)) = node_events.recv() => {
                     self.acknowledge_disconnection(reason);
                     return
                 }
                 _= tokio::time::sleep(delay) => {}
                 else => {}
+            }
+        }
+    }
+
+    #[async_recursion::async_recursion]
+    async fn open_connection(
+        self: &Arc<Node>,
+        config: &NodeConfig,
+        shard: Option<u16>,
+        supported_shard_aware_port: Option<u16>,
+    ) -> Option<(TcpConnection, Supported)> {
+        let (address, shard_aware_port) = self.address.lock().unwrap().unwrap();
+        let shard_info = match (
+            shard,
+            self.sharder(),
+            (shard_aware_port, supported_shard_aware_port),
+        ) {
+            (
+                Some(shard),
+                Some(sharder),
+                (Some(ShardAwarePort::Port(port)), _) | (None, Some(port)),
+            ) => Some(ShardInfo {
+                shard_aware_port: port,
+                nr_shards: sharder.nr_shards(),
+                shard,
+            }),
+            _ => None,
+        };
+        match TcpConnection::open(
+            address,
+            shard_info,
+            config.init_socket.as_ref(),
+            #[cfg(feature = "ssl")]
+            config.ssl_context.as_ref(),
+            config.connect_timeout,
+            self.protocol_version().unwrap(),
+        )
+        .await
+        {
+            Ok((conn, supported)) => Some((conn, supported)),
+            Err(err) => {
+                if shard.is_some() {
+                    let without_shard = self.open_connection(config, None, None).await;
+                    if without_shard.is_some() {
+                        return without_shard;
+                    }
+                }
+                let event = SessionEvent::ConnectionFailed {
+                    node: self.clone(),
+                    error: Arc::new(err),
+                };
+                self.session_events.send(event).ok();
+                None
             }
         }
     }

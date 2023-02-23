@@ -56,7 +56,7 @@ pub(super) async fn session_event_worker(
         let session = Session(session.upgrade()?);
         match &event {
             SessionEvent::NodeStatusUpdate {
-                status: NodeStatus::Up,
+                status: NodeStatus::Up(_),
                 ..
             } if started.is_some() => {
                 started.take().unwrap().send(()).ok();

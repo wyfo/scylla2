@@ -261,17 +261,20 @@ impl Connection {
         self.vectored_queue.close();
     }
 
+    pub(crate) fn reopen(&self) {
+        self.slice_queue.reopen();
+        self.vectored_queue.reopen();
+    }
+
     pub(crate) async fn task(
         &self,
         conn_ref: ConnectionRef,
-        connection: TcpConnection,
+        tcp_conn: TcpConnection,
         read_buffer_size: usize,
         orphan_count_threshold_delay: Duration,
         stop: oneshot::Receiver<()>,
-    ) -> Option<io::Error> {
-        self.slice_queue.reopen();
-        self.vectored_queue.reopen();
-        let (reader, writer) = tokio::io::split(connection);
+    ) -> io::Result<bool> {
+        let (reader, writer) = tokio::io::split(tcp_conn);
         let write_ref = conn_ref.clone();
         let write_task = tokio::spawn(async move { write_ref.get().write_task(writer).await });
         let read_ref = conn_ref.clone();
@@ -289,20 +292,12 @@ impl Connection {
                 .await;
         });
         self.pending_executions.notify_waiters();
-        let write_error = write_task
-            .await
-            .map_err(other_error)
-            .and_then(identity)
-            .err();
-        let read_error = read_task
-            .await
-            .map_err(other_error)
-            .and_then(identity)
-            .err();
+        let write_error = write_task.await.map_err(other_error).and_then(identity);
+        let read_error = read_task.await.map_err(other_error).and_then(identity);
         orphan_task.abort();
-        orphan_task.await.ok();
+        let too_many_orphan_streams = orphan_task.await.is_ok();
         self.stream_pool.reset();
-        write_error.or(read_error)
+        write_error.or(read_error).and(Ok(too_many_orphan_streams))
     }
 
     async fn read_task(

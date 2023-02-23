@@ -1,9 +1,7 @@
-use std::{
-    ops::Deref,
-    sync::{atomic::Ordering, Arc},
-};
+use std::{ops::Deref, sync::Arc};
 
 use scylla2_cql::{
+    error::ConnectionError,
     extensions::ProtocolExtensions,
     protocol::{execute, startup},
     response::supported::Supported,
@@ -11,13 +9,12 @@ use scylla2_cql::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    connection::{tcp::TcpConnection, ConnectionRef},
+    connection::{tcp::TcpConnection, Connection, ConnectionRef},
     error::Disconnected,
     statement::query::cql_query,
     topology::{
-        node::{Node, NodeConfig, NodeDisconnectionReason, NodeStatus},
-        peer::ShardAwarePort,
-        sharding::{ShardInfo, Sharder},
+        node::{Node, NodeConfig, NodeDisconnectionReason, NodeEvent},
+        sharding::Sharder,
     },
     utils::RepeatLast,
     SessionEvent,
@@ -25,17 +22,23 @@ use crate::{
 
 const EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER: usize = 10;
 
+enum ConnectionEvent {
+    Opened(TcpConnection, Supported),
+    Failed,
+    Closed(usize, bool),
+}
+
 pub(super) struct NodeWorker {
     node: Arc<Node>,
-    shard_aware_port: Option<u16>,
-    opened_connection_count: usize,
-    opened_connections: Vec<Vec<TcpConnection>>,
-    used_connections: Vec<Option<oneshot::Sender<()>>>,
     config: Arc<NodeConfig>,
-    used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-    connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
-    connection_request_tx: mpsc::Sender<usize>,
-    connection_request_rx: mpsc::Receiver<usize>,
+    keyspace_used: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
+    node_events: mpsc::UnboundedReceiver<NodeEvent>,
+    supported_shard_aware_port: Option<u16>,
+    connections_to_open: Vec<Vec<usize>>,
+    opened_connections: Vec<TcpConnection>,
+    started_connections: Vec<Option<oneshot::Sender<()>>>,
+    conn_events_tx: mpsc::UnboundedSender<ConnectionEvent>,
+    conn_events_rx: mpsc::UnboundedReceiver<ConnectionEvent>,
 }
 
 impl NodeWorker {
@@ -43,23 +46,26 @@ impl NodeWorker {
         node: Arc<Node>,
         config: Arc<NodeConfig>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-        connection_rx: mpsc::UnboundedReceiver<Option<NodeDisconnectionReason>>,
+        node_events: mpsc::UnboundedReceiver<NodeEvent>,
     ) -> Self {
         let pool = node.connection_pool.get().unwrap();
         let nr_shards = pool.sharder.as_ref().map_or(1, |s| s.nr_shards().get());
         let connection_count = pool.connections.len();
-        let (connection_request_tx, connection_request_rx) = mpsc::channel(connection_count);
+        let conn_per_shard = connection_count / nr_shards as usize;
+        let (conn_events_tx, conn_events_rx) = mpsc::unbounded_channel();
         Self {
             node,
-            shard_aware_port: None,
-            opened_connection_count: 0,
-            opened_connections: (0..nr_shards).map(|_| Default::default()).collect(),
-            used_connections: (0..connection_count).map(|_| Default::default()).collect(),
             config,
-            used_keyspace,
-            connection_rx,
-            connection_request_tx,
-            connection_request_rx,
+            keyspace_used: used_keyspace,
+            node_events,
+            supported_shard_aware_port: None,
+            connections_to_open: (0..nr_shards)
+                .map(|s| (s as usize * conn_per_shard..(s as usize + 1) * conn_per_shard).collect())
+                .collect(),
+            opened_connections: Vec::new(),
+            started_connections: (0..connection_count).map(|_| Default::default()).collect(),
+            conn_events_tx,
+            conn_events_rx,
         }
     }
 
@@ -68,93 +74,37 @@ impl NodeWorker {
         conn: TcpConnection,
         supported: Supported,
     ) -> Result<(), Disconnected> {
-        self.add_connection(conn, supported)?;
-        for i in 0..self.used_connections.len() {
-            self.connection_request_tx.send(i).await.unwrap();
-        }
+        self.try_start(conn, supported)?;
         loop {
-            let conn_index = loop {
-                tokio::select! {
-                    biased;
-                    Some(Some(reason)) = self.connection_rx.recv() => {
-                        self.node.acknowledge_disconnection(reason);
-                        return Err(Disconnected);
+            let has_error = self.open_connections().await?;
+            if has_error {
+                for delay in RepeatLast::new(self.config.reconnection_policy.reconnection_delays())
+                {
+                    self.node
+                        .update_address(self.config.address_translator.as_ref())
+                        .await;
+                    if let Some((conn, supported)) =
+                        self.node.open_connection(&self.config, None, None).await
+                    {
+                        self.try_start(conn, supported)?;
+                        break;
                     }
-                    Some(conn_index) = self.connection_request_rx.recv() => break conn_index,
-                    else => {} // else can only be Some(None) = connection_rx.recv()
-                }
-            };
-            if self.try_start(conn_index).await {
-                continue;
-            }
-            loop {
-                let (conn, supported) = self.open_connection(self.shard(conn_index) as u16).await?;
-                self.add_connection(conn, supported)?;
-                if self.try_start(conn_index).await {
-                    break;
+                    tokio::select! {
+                        Some(NodeEvent::Disconnect(reason)) = self.node_events.recv() => {
+                            self.node.acknowledge_disconnection(reason);
+                            return Err(Disconnected)
+                        }
+                        _= tokio::time::sleep(delay) => {}
+                        else => {}  // else can only be Some(None) = connection_rx.recv()
+                    }
                 }
             }
         }
     }
 
-    async fn open_connection(
-        &mut self,
-        shard: u16,
-    ) -> Result<(TcpConnection, Supported), Disconnected> {
-        for delay in RepeatLast::new(self.config.reconnection_policy.reconnection_delays()) {
-            let (address, shard_aware_port) = self.node.address.lock().unwrap().unwrap();
-            let shard_info = match (self.node.sharder(), shard_aware_port, self.shard_aware_port) {
-                (Some(sharder), Some(ShardAwarePort::Port(port)), _)
-                | (Some(sharder), None, Some(port)) => Some(ShardInfo {
-                    shard_aware_port: port,
-                    nr_shards: sharder.nr_shards(),
-                    shard,
-                }),
-                _ => None,
-            };
-            match TcpConnection::open(
-                address,
-                shard_info,
-                self.config.init_socket.as_ref(),
-                #[cfg(feature = "ssl")]
-                self.config.ssl_context.as_ref(),
-                self.config.connect_timeout,
-                self.node.protocol_version().unwrap(),
-            )
-            .await
-            {
-                Ok(conn) => return Ok(conn),
-                Err(err) => {
-                    let event = SessionEvent::ConnectionFailed {
-                        node: self.node.clone(),
-                        error: Arc::new(err),
-                    };
-                    self.node.session_events.send(event).ok();
-                }
-            }
-            tokio::select! {
-                Some(Some(reason)) = self.connection_rx.recv() => {
-                    self.node.acknowledge_disconnection(reason);
-                    return Err(Disconnected)
-                }
-                _= tokio::time::sleep(delay) => {}
-                else => {}  // else can only be Some(None) = connection_rx.recv()
-            }
-            self.node
-                .update_address(self.config.address_translator.as_ref())
-                .await;
-        }
-        unreachable!()
-    }
-
-    fn add_connection(
-        &mut self,
-        conn: TcpConnection,
-        supported: Supported,
-    ) -> Result<(), Disconnected> {
+    fn try_start(&mut self, conn: TcpConnection, supported: Supported) -> Result<(), Disconnected> {
         if Sharder::from_supported(&supported).as_ref() != self.node.sharder() {
             self.node
-                .clone()
                 .acknowledge_disconnection(NodeDisconnectionReason::ShardingChanged);
             return Err(Disconnected);
         }
@@ -162,175 +112,209 @@ impl NodeWorker {
             != self.node.protocol_extensions().unwrap()
         {
             self.node
-                .clone()
                 .acknowledge_disconnection(NodeDisconnectionReason::ExtensionsChanged);
             return Err(Disconnected);
         }
-        self.shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT");
+        self.supported_shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT");
         #[cfg(feature = "ssl")]
         if self.config.ssl_context.is_some() {
-            self.shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT_SSL");
+            self.supported_shard_aware_port = supported.get("SCYLLA_SHARD_AWARE_PORT_SSL");
         }
         let shard = self
             .node
             .sharder()
             .and_then(|_| supported.get("SCYLLA_SHARD"))
             .unwrap_or(0);
-        if shard > self.opened_connections.len() {
+        if shard > self.connections_to_open.len() {
             #[cfg(feature = "tracing")]
             tracing::error!(
                 shard,
-                nr_shard = self.opened_connections.len(),
+                nr_shard = self.connections_to_open.len(),
                 "Invalid shard returned by Scylla"
             );
             return Ok(());
         }
-        if self.opened_connection_count
-            > self.opened_connections.len() * EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER
-        {
-            self.opened_connections.iter_mut().for_each(Vec::clear);
-            self.opened_connection_count = 0;
-        }
-        self.opened_connection_count += 1;
-        self.opened_connections[shard].push(conn);
-        Ok(())
-    }
-
-    fn shard(&self, conn_index: usize) -> usize {
-        let conn_per_shard = self.used_connections.len() / self.opened_connections.len();
-        conn_index / conn_per_shard
-    }
-
-    async fn try_start(&mut self, conn_index: usize) -> bool {
-        let shard = self.shard(conn_index);
-        while let Some(mut conn) = self.opened_connections[shard].pop() {
-            let Ok(address) = conn.peer_addr() else {
-                continue
-            };
-            if startup(
-                &mut conn,
-                address,
-                self.node.protocol_version().unwrap(),
-                &self.config.startup_options,
-                self.config.authentication_protocol.as_deref(),
-            )
-            .await
-            .is_err()
-            {
-                continue;
-            }
-            let query = if let Some(keyspace) = self.used_keyspace.read().await.deref().as_deref() {
-                format!("USE \"{keyspace}\"")
-            } else {
-                "SELECT key FROM system.local where key = 'local'".into()
-            };
-            if execute(
-                &mut conn,
-                self.node.protocol_version().unwrap(),
-                self.node.protocol_extensions(),
-                cql_query(&query, ()),
-            )
-            .await
-            .is_err()
-            {
-                continue;
-            }
-            let (tx, rx) = oneshot::channel();
-            self.used_connections[conn_index] = Some(tx);
-            self.opened_connection_count -= 1;
+        if let Some(conn_index) = self.connections_to_open[shard].pop() {
+            let (stop_tx, stop_rx) = oneshot::channel();
+            self.started_connections[conn_index] = Some(stop_tx);
             tokio::spawn(start_connection(
                 self.node.clone(),
                 conn_index,
                 shard as u16,
                 conn,
                 self.config.clone(),
-                rx,
-                self.connection_request_tx.clone(),
+                self.keyspace_used.clone(),
+                stop_rx,
+                self.conn_events_tx.clone(),
             ));
-            return true;
+        } else {
+            self.opened_connections.push(conn);
+            if self.opened_connections.len()
+                > self.connections_to_open.len() * EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER
+            {
+                self.opened_connections.clear();
+            }
         }
-        false
+        Ok(())
+    }
+
+    async fn open_connections(&mut self) -> Result<bool, Disconnected> {
+        self.connections_to_open
+            .iter()
+            .enumerate()
+            .flat_map(|(shard, conn_indexes)| conn_indexes.iter().map(move |_| (shard, ())))
+            .for_each(|(shard, _)| {
+                tokio::spawn(open_connection(
+                    self.node.clone(),
+                    self.config.clone(),
+                    shard as u16,
+                    self.supported_shard_aware_port,
+                    self.conn_events_tx.clone(),
+                ));
+            });
+        let mut opening_count: usize = self.connections_to_open.iter().map(Vec::len).sum();
+        if opening_count == 0 {
+            self.opened_connections.clear();
+        }
+        let mut has_error = false;
+        loop {
+            let event = tokio::select! {
+                Some(NodeEvent::Disconnect(reason)) = self.node_events.recv() => {
+                    self.node.acknowledge_disconnection(reason);
+                    return Err(Disconnected)
+                }
+                event = self.conn_events_rx.recv() => event.unwrap(),
+                else => continue,
+            };
+            match event {
+                ConnectionEvent::Opened(conn, supported) => {
+                    opening_count -= 1;
+                    self.try_start(conn, supported)?;
+                }
+                ConnectionEvent::Failed => {
+                    opening_count -= 1;
+                }
+                ConnectionEvent::Closed(conn_index, error) => {
+                    has_error |= error;
+                    let conn_per_shard =
+                        self.connections_to_open.len() / self.opened_connections.len();
+                    let shard = conn_index / conn_per_shard;
+                    self.connections_to_open[shard].push(conn_index);
+                }
+            }
+            if opening_count == 0 {
+                return Ok(has_error);
+            }
+        }
     }
 }
 
+async fn open_connection(
+    node: Arc<Node>,
+    config: Arc<NodeConfig>,
+    shard: u16,
+    supported_shard_aware_port: Option<u16>,
+    conn_events: mpsc::UnboundedSender<ConnectionEvent>,
+) {
+    let event = match node
+        .open_connection(&config, Some(shard), supported_shard_aware_port)
+        .await
+    {
+        Some((conn, supported)) => ConnectionEvent::Opened(conn, supported),
+        None => ConnectionEvent::Failed,
+    };
+    conn_events.send(event).ok();
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn start_connection(
     node: Arc<Node>,
-    index: usize,
+    conn_index: usize,
     shard: u16,
-    connection: TcpConnection,
+    mut tcp_conn: TcpConnection,
     config: Arc<NodeConfig>,
+    keyspace_used: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
     stop: oneshot::Receiver<()>,
-    connection_request_tx: mpsc::Sender<usize>,
+    conn_events: mpsc::UnboundedSender<ConnectionEvent>,
 ) {
-    let mut conn_count = node.active_connection_count.load(Ordering::Relaxed);
-    loop {
-        if conn_count < 0 {
-            return;
-        }
-        match node.active_connection_count.compare_exchange_weak(
-            conn_count,
-            conn_count + 1,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => break,
-            Err(c) => conn_count = c,
-        }
+    let conn_ref = ConnectionRef::new(node.clone(), conn_index);
+    let conn = conn_ref.get();
+    if let Err(err) = startup_and_use(&node, &mut tcp_conn, conn, &config, &keyspace_used).await {
+        let event = SessionEvent::ConnectionFailed {
+            node: node.clone(),
+            error: Arc::new(err),
+        };
+        node.session_events.send(event).ok();
+        let event = ConnectionEvent::Closed(conn_index, true);
+        conn_events.send(event).ok();
     }
     let event = SessionEvent::ConnectionOpened {
         node: node.clone(),
         shard,
-        index,
+        index: conn_index,
     };
     node.session_events.send(event).ok();
-    if conn_count == 0 {
-        let event = SessionEvent::NodeStatusUpdate {
-            node: node.clone(),
-            status: NodeStatus::Up,
-        };
-        node.session_events.send(event).ok();
-    }
     node.update_active_connection_count(1);
-    let conn_ref = ConnectionRef::new(node.clone(), index);
-    let error = conn_ref
-        .clone()
-        .get()
+    let task_res = conn
         .task(
-            conn_ref,
-            connection,
+            conn_ref.clone(),
+            tcp_conn,
             config.read_buffer_size,
             config.orphan_count_threshold_delay,
             stop,
         )
         .await;
-    loop {
-        if conn_count < 0 {
-            return;
-        }
-        match node.active_connection_count.compare_exchange_weak(
-            conn_count,
-            conn_count - 1,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => break,
-            Err(c) => conn_count = c,
-        }
-    }
+    let too_many_orphan_streams = *task_res.as_ref().unwrap_or(&false);
     let event = SessionEvent::ConnectionClosed {
         node: node.clone(),
         shard,
-        index,
-        error: error.map(Arc::new),
+        index: conn_index,
+        too_many_orphan_streams,
+        error: task_res.err().map(Arc::new),
     };
-    if conn_count == 1 {
-        let event = SessionEvent::NodeStatusUpdate {
-            node: node.clone(),
-            status: NodeStatus::Down,
-        };
-        node.session_events.send(event).ok();
-    }
-
+    node.update_active_connection_count(-1);
     node.session_events.send(event).ok();
-    connection_request_tx.send(index).await.ok();
+    let event = ConnectionEvent::Closed(conn_index, !too_many_orphan_streams);
+    conn_events.send(event).ok();
+}
+
+async fn startup_and_use(
+    node: &Node,
+    tcp_conn: &mut TcpConnection,
+    conn: &Connection,
+    config: &NodeConfig,
+    keyspace_used: &tokio::sync::RwLock<Option<Arc<str>>>,
+) -> Result<(), ConnectionError> {
+    let version = node.protocol_version().unwrap();
+    let address = node.address.lock().unwrap().unwrap().0;
+    startup(
+        &mut *tcp_conn,
+        address,
+        version,
+        &config.startup_options,
+        config.authentication_protocol.as_deref(),
+    )
+    .await?;
+    let keyspace_guard = keyspace_used.read().await;
+    if let Some(keyspace) = keyspace_guard.deref() {
+        match execute(
+            tcp_conn,
+            version,
+            None,
+            cql_query(&format!("USE \"{keyspace}\""), ()),
+        )
+        .await
+        {
+            Ok(_) => {}
+            #[allow(unused_variables)]
+            Err(ConnectionError::Database(error)) => {
+                #[cfg(feature = "tracing")]
+                tracing::error!(?error, "USE query failed on connection opening");
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    conn.reopen();
+    drop(keyspace_guard);
+    Ok(())
 }

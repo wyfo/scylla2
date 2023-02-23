@@ -134,14 +134,6 @@ impl TcpConnection {
         }
         Err(error.unwrap().into())
     }
-
-    pub(crate) fn peer_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            Self::Tcp(stream) => stream.peer_addr(),
-            #[cfg(feature = "ssl")]
-            Self::Ssl(stream) => stream.get_ref().peer_addr(),
-        }
-    }
 }
 
 impl AsyncRead for TcpConnection {
