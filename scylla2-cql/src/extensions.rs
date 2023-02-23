@@ -23,7 +23,7 @@ impl ProtocolExtensions {
             .get("SCYLLA_LWT_ADD_METADATA_MARK")
             .and_then(|values| {
                 values.iter().find_map(|s| {
-                    s.strip_prefix("LWT_OPTI    MIZATION_META_BIT_MASK=")?
+                    s.strip_prefix("LWT_OPTIMIZATION_META_BIT_MASK=")?
                         .parse()
                         .ok()
                 })
