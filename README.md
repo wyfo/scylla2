@@ -46,11 +46,11 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 
 ## Performance
 
-I've started some benchmark using https://github.com/pkolaczk/latte, and the results are disturbing. 
+I've started some benchmark using https://github.com/pkolaczk/latte, and as expected, this driver performs better than the official one.
 
-As expected, this driver is well optimized and performs better than the official one, but not by a large margin. However, a considerable part of the execution time is taken by write system calls (not the case for the official driver). It seems that the driver is in fact too fast (*swap-buffer-queue* especially), and doesn't buffer writes enough – even with the addition of a `tokio::task::yield_now` loop. So, too slow because of too fast for now.
+Single threaded comparison with local database shows 40% performance improvement for example.
 
-Fun fact, with similar execution time, this driver will consume at least 33% less CPU time, so again, it's well optimized.
+Fun fact, when benchmark times are similar, mostly because of the database response time, this driver use 30% less CPU time.
 
 ## What's next
 

@@ -19,7 +19,7 @@ use scylla2_cql::{
     request::prepare::Prepare,
     response::{result::CqlResult, Response, ResponseBody},
 };
-use tokio::sync::{broadcast, mpsc, oneshot, Notify};
+use tokio::sync::{broadcast, mpsc, Notify};
 use uuid::Uuid;
 
 use crate::{
@@ -45,7 +45,7 @@ use crate::{
         Statement,
     },
     topology::{
-        node::{Node, NodeConfig, NodeDisconnectionReason},
+        node::{Node, NodeConfig, NodeDisconnectionReason, NodeStatus},
         partitioner::Partitioner,
         peer::{NodeDistance, NodeLocalizer, Peer},
         ring::{Partition, ReplicationStrategy, Ring},
@@ -137,7 +137,7 @@ impl Session {
                 NodeAddress::Hostname(hostname) => match resolve_hostname(&hostname).await {
                     Ok(addr) => addr,
                     Err(err) => {
-                        control_conn = Err(err.into());
+                        control_conn = Err(ConnectionError::Io(err).into());
                         continue;
                     }
                 },
@@ -179,12 +179,10 @@ impl Session {
             topology_lock: Default::default(),
         });
         let session = Self(inner);
-        let (started_tx, started_rx) = oneshot::channel();
         let weak = Arc::downgrade(&session.0);
         tokio::spawn(session_event_worker(
             weak.clone(),
             session_events_internal_rx,
-            started_tx,
         ));
         tokio::spawn(database_event_worker(
             weak.clone(),
@@ -210,14 +208,27 @@ impl Session {
         if let Some(keyspace) = config.use_keyspace {
             session.use_keyspace(keyspace).await?;
         }
-        match session.refresh_topology().await {
-            Ok(_) => Ok::<_, ConnectionError>(()),
-            Err(ExecutionError::Io(error)) => Err(error.into()),
-            Err(ExecutionError::Database(error)) => Err(error.into()),
+        let topology = match session.refresh_topology().await {
+            Ok(topology) => topology,
+            Err(ExecutionError::Io(error)) => return Err(ConnectionError::Io(error).into()),
+            Err(ExecutionError::Database(error)) => {
+                return Err(ConnectionError::Database(error).into())
+            }
             _ => unreachable!(),
-        }?;
-        started_rx.await.ok();
+        };
+        topology
+            .wait_nodes(|_, status| !matches!(status, NodeStatus::Connecting))
+            .await;
         Ok(session)
+    }
+
+    pub async fn wait_for_all_connections(&self) {
+        self.topology()
+            .wait_nodes(|node, status| {
+                let conn_total = node.connections().map_or(0, <[_]>::len);
+                !matches!(status, NodeStatus::Up(conn_count) if conn_count.get() < conn_total)
+            })
+            .await;
     }
 
     async fn reopen_control_connection(&self) {
@@ -555,12 +566,12 @@ impl Session {
             .for_each(drop);
     }
 
-    pub async fn refresh_topology(&self) -> Result<(), ExecutionError> {
+    pub async fn refresh_topology(&self) -> Result<Arc<Topology>, ExecutionError> {
         let instant = Instant::now();
         let _lock = self.0.topology_lock.lock().await;
         let topology = self.topology();
         if topology.latest_refresh() > instant {
-            return Ok(());
+            return Ok(topology);
         }
         let peers = self.control().get_peers().await?;
         let node_stream: FuturesUnordered<_> = peers
@@ -589,11 +600,12 @@ impl Session {
                 }
             }
             let event = SessionEvent::TopologyUpdate {
-                topology: new_topology,
+                topology: new_topology.clone(),
             };
             self.0.session_events_internal.send(event).ok();
+            return Ok(new_topology);
         }
-        Ok(())
+        Ok(topology)
     }
 
     async fn topology_node(&self, topology: &Topology, peer: Peer) -> Option<(Arc<Node>, bool)> {
