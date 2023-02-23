@@ -73,7 +73,7 @@ pub(crate) struct SessionInner {
     node_localizer: Arc<dyn NodeLocalizer>,
     partitioner_cache: tokio::sync::RwLock<HashMap<String, HashMap<String, Partitioner>>>,
     register_for_schema_event: bool,
-    ring_cache: RwLock<HashMap<ReplicationStrategy, Arc<ArcSwap<Ring>>>>,
+    ring_cache: RwLock<HashMap<ReplicationStrategy, Ring>>,
     schema_agreement_interval: Duration,
     session_events: broadcast::Sender<SessionEvent>,
     session_event_filter: Option<HashSet<SessionEventType>>,
@@ -306,7 +306,7 @@ impl Session {
         let request = statement.as_request(config, &options, values);
         let topology;
         let (local_nodes, remote_nodes) = match partition {
-            Some(ref p) => (p.local_nodes(), p.remote_nodes()),
+            Some(ref p) => (p.local_replicas(), p.remote_replicas()),
             None => {
                 topology = self.topology();
                 (topology.local_nodes(), topology.remote_nodes())
@@ -493,7 +493,7 @@ impl Session {
             .unwrap_or_default())
     }
 
-    pub async fn get_ring(&self, keyspace: &str) -> Result<Arc<ArcSwap<Ring>>, ExecutionError> {
+    pub async fn get_ring(&self, keyspace: &str) -> Result<Ring, ExecutionError> {
         let cache = self.0.strategy_cache.read().await;
         if let Some(strategy) = cache.get(keyspace) {
             return Ok(self.get_or_compute_ring(strategy));
@@ -513,15 +513,17 @@ impl Session {
         Ok(self.get_or_compute_ring(&strategy))
     }
 
-    fn get_or_compute_ring(&self, strategy: &ReplicationStrategy) -> Arc<ArcSwap<Ring>> {
+    fn get_or_compute_ring(&self, strategy: &ReplicationStrategy) -> Ring {
         let cache = self.0.ring_cache.read().unwrap();
         if let Some(ring) = cache.get(strategy) {
             return ring.clone();
         }
         drop(cache);
-        let ring = Ring::new(self.0.topology.load().nodes(), strategy);
-        let ring = Arc::new(ArcSwap::from_pointee(ring));
         let mut cache = self.0.ring_cache.write().unwrap();
+        if let Some(ring) = cache.get(strategy) {
+            return ring.clone();
+        }
+        let ring = Ring::new(self.0.topology.load().nodes(), strategy.clone());
         cache.insert(strategy.clone(), ring.clone());
         ring
     }
@@ -576,7 +578,7 @@ impl Session {
             let new_topology = Arc::new(Topology::new(nodes));
             self.0.topology.store(new_topology.clone());
             for (strategy, ring) in self.0.ring_cache.read().unwrap().iter() {
-                ring.store(Arc::new(Ring::new(new_topology.nodes(), strategy)));
+                ring.update(new_topology.nodes(), strategy.clone());
             }
             for node in topology.nodes() {
                 if !new_topology

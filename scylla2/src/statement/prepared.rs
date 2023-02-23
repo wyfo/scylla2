@@ -1,6 +1,5 @@
 use std::{marker::PhantomData, ops::Deref, sync::Arc};
 
-use arc_swap::ArcSwap;
 use scylla2_cql::{
     request::{execute::Execute, query::values::QueryValues},
     response::result::{column_spec::ColumnSpec, prepared::Prepared},
@@ -23,7 +22,7 @@ use crate::{
 pub struct PreparedStatement {
     pub(crate) statement: String,
     pub(crate) prepared: Prepared,
-    pub(crate) partitioning: Option<(Partitioner, Arc<ArcSwap<Ring>>)>,
+    pub(crate) partitioning: Option<(Partitioner, Ring)>,
     pub(crate) config: StatementConfig,
 }
 
@@ -43,8 +42,8 @@ impl PreparedStatement {
         Some(&self.partitioning.as_ref()?.0)
     }
 
-    pub fn ring(&self) -> Option<Arc<Ring>> {
-        Some(self.partitioning.as_ref()?.1.load_full())
+    pub fn ring(&self) -> Option<&Ring> {
+        Some(&self.partitioning.as_ref()?.1)
     }
 }
 
@@ -80,7 +79,7 @@ where
     fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
         if let Some((partitioner, ring)) = self.partitioning.as_ref() {
             let token = partitioner.token(values, &self.pk_indexes)?;
-            return Ok(Some(ring.load_full().get_partition(token)));
+            return Ok(Some(ring.get_partition(token)));
         }
         Ok(None)
     }
