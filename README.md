@@ -36,6 +36,7 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - Execution metadata (token, node, failed attempts, etc.) are not available for the moment
 - tracing
 - test, tests, and more tests
+- DOCUMENTATION -_-'
 - benchmark
 - prepare for tablet partitioning?
 - LWT master replica optimization
