@@ -109,6 +109,10 @@ impl Connection {
         write_buffer_size: usize,
         orphan_count_threshold: usize,
     ) -> Self {
+        let slice_queue = SBQueue::with_capacity(write_buffer_size);
+        slice_queue.close();
+        let vectored_queue = SBQueue::with_capacity(100);
+        vectored_queue.close();
         Self {
             version,
             extensions,
@@ -116,8 +120,8 @@ impl Connection {
             compression_min_size,
             ongoing_requests: AtomicUsize::new(0),
             pending_executions: Notify::new(),
-            slice_queue: SBQueue::with_capacity(write_buffer_size),
-            vectored_queue: SBQueue::with_capacity(100),
+            slice_queue,
+            vectored_queue,
             stream_pool: StreamPool::new(orphan_count_threshold),
         }
     }
