@@ -5,9 +5,11 @@ use std::{
     iter::Fuse,
     net::SocketAddr,
     pin::Pin,
+    slice,
     task::{ready, Context, Poll},
 };
 
+use rand::seq::SliceRandom;
 use scylla2_cql::response::ResponseBody;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -185,6 +187,29 @@ where
             self.last.clone()
         } else {
             panic!("Empty iterator");
+        }
+    }
+}
+
+pub(crate) enum RandomSliceIter<'a, T> {
+    Single(slice::Iter<'a, T>),
+    Random(rand::seq::SliceChooseIter<'a, [T], T>),
+}
+impl<'a, T> RandomSliceIter<'a, T> {
+    pub(crate) fn new(slice: &'a [T]) -> Self {
+        match slice.len() {
+            1 => Self::Single(slice.iter()),
+            len => Self::Random(slice.choose_multiple(&mut rand::thread_rng(), len)),
+        }
+    }
+}
+impl<'a, T> Iterator for RandomSliceIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Single(iter) => iter.next(),
+            Self::Random(iter) => iter.next(),
         }
     }
 }

@@ -5,7 +5,7 @@ use std::{
     num::{NonZeroU16, NonZeroUsize},
     str::FromStr,
     sync::{
-        atomic::{AtomicIsize, AtomicUsize, Ordering},
+        atomic::{AtomicIsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -174,7 +174,6 @@ pub struct Node {
     session_events: mpsc::UnboundedSender<SessionEvent>,
     node_events: mpsc::UnboundedSender<NodeEvent>,
     schema_agreement_interval: Duration,
-    round_robin: AtomicUsize,
 }
 
 impl fmt::Debug for Node {
@@ -215,7 +214,6 @@ impl Node {
             session_events,
             node_events: node_events_tx,
             schema_agreement_interval,
-            round_robin: AtomicUsize::new(0),
         });
         assert_eq!(matches!(distance, NodeDistance::Ignored), config.is_none());
         if let Some(config) = config {
@@ -316,14 +314,6 @@ impl Node {
         let conn_per_shard = pool.connections.len() / sharder.nr_shards().get() as usize;
         let offset = shard as usize * conn_per_shard;
         Some(&pool.connections[offset..offset + conn_per_shard])
-    }
-
-    pub fn round_robin(&self) -> &AtomicUsize {
-        &self.round_robin
-    }
-
-    pub fn is_disconnected(&self) -> bool {
-        self.active_connection_count.load(Ordering::Relaxed) < 0
     }
 
     pub fn try_reconnect(&self) -> Result<(), Disconnected> {

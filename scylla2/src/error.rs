@@ -25,12 +25,6 @@ pub enum SessionError {
     ConnectionError(#[from] ConnectionError),
 }
 
-impl From<io::Error> for SessionError {
-    fn from(value: io::Error) -> Self {
-        Self::ConnectionError(value.into())
-    }
-}
-
 impl From<UseKeyspaceError> for SessionError {
     fn from(value: UseKeyspaceError) -> Self {
         match value {

@@ -3,10 +3,8 @@ use std::{
     fmt,
     fmt::Formatter,
     future::Future,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, RwLock,
-    },
+    iter,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -51,7 +49,7 @@ use crate::{
         ring::{Partition, ReplicationStrategy, Ring},
         Topology,
     },
-    utils::{invalid_response, other_error, resolve_hostname},
+    utils::{invalid_response, other_error, resolve_hostname, RandomSliceIter},
     DatabaseEventType,
 };
 
@@ -323,27 +321,18 @@ impl Session {
                 (topology.local_nodes(), topology.remote_nodes())
             }
         };
-        static NODE_ROUND_ROBIN: AtomicUsize = AtomicUsize::new(0);
-        let round_robin = NODE_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed);
-        let safe_modulo = |len| if len == 0 { 0 } else { round_robin % len };
-        let local = safe_modulo(local_nodes.len());
-        let remote = safe_modulo(remote_nodes.len());
         let token = partition.as_ref().map(Partition::token);
-        for node in local_nodes[local..]
-            .iter()
-            .chain(&local_nodes[..local])
-            .chain(&remote_nodes[remote..])
-            .chain(&remote_nodes[..remote])
-        {
-            match node.get_sharded_connections(token) {
-                Some(conns) => {
-                    let index = if conns.len() == 1 {
-                        0
-                    } else {
-                        node.round_robin().fetch_add(1, Ordering::Relaxed) % conns.len()
-                    };
-                    let connection = &conns[index];
-                    match connection
+        for node in local_nodes.iter().chain(remote_nodes) {
+            if let Some(conns) = node.get_sharded_connections(token) {
+                let conn_iter = RandomSliceIter::new(conns)
+                    .chain(iter::repeat_with(|| node.get_random_connection()).flatten());
+                #[allow(unused_variables)]
+                for (i, conn) in conn_iter.enumerate() {
+                    #[cfg(feature = "tracing")]
+                    if i > conns.len() {
+                        tracing::trace!("No connection available, use a different");
+                    }
+                    match conn
                         .execute_queued(&request, config.tracing.unwrap_or(false), None)
                         .await
                     {
@@ -371,17 +360,6 @@ impl Session {
                                 }
                                 _ => {}
                             }
-                            if let (
-                                ResponseBody::Result(CqlResult::SchemaChange(event)),
-                                Some(timeout),
-                            ) = (&response.body, self.0.auto_await_schema_agreement_timeout)
-                            {
-                                tokio::time::timeout(timeout, node.wait_schema_agreement())
-                                    .await
-                                    .map_err(|_| {
-                                        ExecutionError::SchemaAgreementTimeout(event.clone())
-                                    })?;
-                            }
                             return Ok(ExecutionResult::from_response(
                                 response,
                                 statement.result_specs(),
@@ -394,11 +372,12 @@ impl Session {
                         Err(ConnectionExecutionError::InvalidRequest(invalid)) => {
                             return Err(invalid.into())
                         }
-                        Err(ConnectionExecutionError::Io(err)) => return Err(err.into()),
+                        Err(ConnectionExecutionError::Io(err)) => {
+                            return Err(err.into());
+                        }
                     }
                 }
-                None => continue,
-            }
+            };
         }
         Err(ExecutionError::NoConnection)
     }
