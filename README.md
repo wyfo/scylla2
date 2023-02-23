@@ -35,7 +35,6 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
 - Execution metadata (token, node, failed attempts, etc.) are not available for the moment
 - tracing
-- use default statement config
 - test, tests, and more tests
 - benchmark
 - prepare for tablet partitioning?
