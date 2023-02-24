@@ -68,6 +68,9 @@ impl Default for SessionConfig {
         if let Some(version) = option_env!("CARGO_PKG_VERSION") {
             startup_options.insert("DRIVER_VERSION".into(), version.into());
         }
+        // TODO what should be the default value? It needs a default value because Cassandra
+        // requires it (not Scylla).
+        startup_options.insert("CQL_VERSION".into(), "4.0.0".into());
         Self {
             address_translator: Arc::new(
                 |ip: IpAddr| -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
