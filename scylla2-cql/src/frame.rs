@@ -157,12 +157,22 @@ pub fn crc24(buf: &[u8]) -> [u8; 3] {
 }
 
 // Wrap crc32fast::Hasher just to return le_bytes
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Crc32Hasher(crc32fast::Hasher);
+
+impl Default for Crc32Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Crc32Hasher {
     pub fn new() -> Self {
-        Default::default()
+        // https://github.com/datastax/python-driver/blob/15d715f4e686032b02ce785eca1d176d2b25e32b/cassandra/segment.py#L26
+        const CRC32_INITIAL: &[u8; 4] = b"\xfa\x2d\x55\xca";
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(CRC32_INITIAL);
+        Self(hasher)
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
