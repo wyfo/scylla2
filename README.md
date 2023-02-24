@@ -1,6 +1,6 @@
 # scylla2
 
-This is a POC (with more than 12kloc, maybe not a POC anymore) of a new implementation of the Scylla Rust driver, focusing on performance and memory consumption, but not only.
+This is a POC (with more than 15kloc, maybe not a POC anymore) of a new implementation of the Scylla Rust driver, focusing on performance and memory consumption, but not only.
 
 I've started the development at the end of October 2022, mostly on my spare times, so the development is quite messy (I often work during night when kids sleep), and there are still some things to do (hopefully, mostly tests at this time).
 
