@@ -28,10 +28,6 @@ async fn read_envelope_v4(
     let body = if header.opcode == OpCode::Result && header.length as usize == VOID.len() {
         let mut buffer = [0; VOID.len()];
         reader.read_exact(&mut buffer).await?;
-        if let Some(crc) = crc {
-            crc.write(&header_buf);
-            crc.write(&buffer);
-        }
         if buffer == VOID {
             Bytes::from_static(&VOID)
         } else {
@@ -40,12 +36,12 @@ async fn read_envelope_v4(
     } else {
         let mut buffer = vec![0u8; header.length as usize];
         reader.read_exact(&mut buffer).await?;
-        if let Some(crc) = crc {
-            crc.write(&header_buf);
-            crc.write(&buffer);
-        }
         buffer.into()
     };
+    if let Some(crc) = crc {
+        crc.write(&header_buf);
+        crc.write(&body);
+    }
     Ok(Envelope::from_parts(header, body))
 }
 
