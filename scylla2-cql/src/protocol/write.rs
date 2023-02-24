@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     future::Future,
     io,
     io::IoSlice,
@@ -49,9 +50,11 @@ pub async fn write_envelope(
 }
 
 // Temporary waiting for write_all_vectored stabilization
+#[cfg(feature = "write-all-vectored")]
 trait IoSliceExt<'a> {
     fn advance_slices2(bufs: &mut &mut [IoSlice<'a>], n: usize);
 }
+#[cfg(feature = "write-all-vectored")]
 impl<'a> IoSliceExt<'a> for IoSlice<'a> {
     fn advance_slices2(bufs: &mut &mut [IoSlice<'a>], n: usize) {
         // Number of buffers to remove.
@@ -79,7 +82,7 @@ impl<'a> IoSliceExt<'a> for IoSlice<'a> {
     }
 }
 
-pub(crate) trait AsyncWriteAllVectored: AsyncWriteExt {
+pub trait AsyncWriteAllVectored: AsyncWriteExt {
     fn write_all_vectored<'a, 'b>(
         &'a mut self,
         bufs: &'a mut [IoSlice<'b>],
@@ -93,13 +96,13 @@ pub(crate) trait AsyncWriteAllVectored: AsyncWriteExt {
 
 impl<T> AsyncWriteAllVectored for T where T: AsyncWriteExt {}
 
-pub(crate) struct WriteAllVectored<'a, 'b, W: ?Sized + Unpin> {
+#[cfg(feature = "write-all-vectored")]
+pub struct WriteAllVectored<'a, 'b, W: ?Sized + Unpin> {
     writer: &'a mut W,
     bufs: &'a mut [IoSlice<'b>],
 }
 
-impl<W: ?Sized + Unpin> Unpin for WriteAllVectored<'_, '_, W> {}
-
+#[cfg(feature = "write-all-vectored")]
 impl<'a, 'b, W: AsyncWrite + ?Sized + Unpin> WriteAllVectored<'a, 'b, W> {
     pub(super) fn new(writer: &'a mut W, mut bufs: &'a mut [IoSlice<'b>]) -> Self {
         IoSlice::advance_slices2(&mut bufs, 0);
@@ -107,6 +110,7 @@ impl<'a, 'b, W: AsyncWrite + ?Sized + Unpin> WriteAllVectored<'a, 'b, W> {
     }
 }
 
+#[cfg(feature = "write-all-vectored")]
 impl<W: AsyncWrite + ?Sized + Unpin> Future for WriteAllVectored<'_, '_, W> {
     type Output = io::Result<()>;
 
@@ -122,5 +126,56 @@ impl<W: AsyncWrite + ?Sized + Unpin> Future for WriteAllVectored<'_, '_, W> {
         }
 
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(not(feature = "write-all-vectored"))]
+pub struct WriteAllVectored<'a, 'b, W: ?Sized + Unpin> {
+    writer: &'a mut W,
+    bufs: &'a mut [IoSlice<'b>],
+    index: usize,
+    pos: usize,
+}
+
+#[cfg(not(feature = "write-all-vectored"))]
+impl<'a, 'b, W: AsyncWrite + ?Sized + Unpin> WriteAllVectored<'a, 'b, W> {
+    pub(super) fn new(writer: &'a mut W, bufs: &'a mut [IoSlice<'b>]) -> Self {
+        Self {
+            writer,
+            bufs,
+            index: 0,
+            pos: 0,
+        }
+    }
+}
+
+#[cfg(not(feature = "write-all-vectored"))]
+impl<W: AsyncWrite + ?Sized + Unpin> Future for WriteAllVectored<'_, '_, W> {
+    type Output = io::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = &mut *self;
+        while this.index != this.bufs.len() {
+            let n = ready!(
+                Pin::new(&mut this.writer).poll_write(cx, &this.bufs[this.index][this.pos..])
+            )?;
+            if n == 0 {
+                return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            } else if n == this.bufs[this.index][this.pos..].len() {
+                this.index += 1;
+                this.pos = 0;
+            } else {
+                this.pos += n;
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<W: ?Sized + Unpin> Unpin for WriteAllVectored<'_, '_, W> {}
+
+impl<W: ?Sized + Unpin> fmt::Debug for WriteAllVectored<'_, '_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WriteAllVectored").finish()
     }
 }

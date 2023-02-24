@@ -2,6 +2,7 @@
 #![deny(clippy::dbg_macro)]
 #![deny(clippy::map_unwrap_or)]
 #![deny(clippy::semicolon_if_nothing_returned)]
+#![forbid(unsafe_code)]
 
 pub mod auth;
 pub mod connection;

@@ -17,15 +17,15 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 
 ## Main differences with the official driver
 
-- Builtin support of multiple native CQL protocol version(s), can be used with Cassandra 4.0 (which uses protocol v5)
+- Better [performances](#performance), CPU utilisation and memory consumption
+- Builtin support of multiple native CQL protocol versions, can be used with Cassandra 4.0 (which uses protocol v5)
 - Zero-copy deserialization
-- Zero/one allocation per-request in normal case (especially thanks to https://github.com/wyfo/swap-buffer-queue)
+- Zero/one allocation per request in normal case (especially thanks to https://github.com/wyfo/swap-buffer-queue)
 - Node distance support (so datacenter-aware and whitelist/blacklist possibility)
 - Query plan caching (taking distance in account)
 - Optimized execution path to improve memory locality
-- Easier interface with only one method `Session::execute` instead of `Session::query`/`Session::execute`/`Session::batch`
+- Easier interface with only one method `Session::execute` instead of `Session::query`/`Session::execute`/`Session::batch`, and generics batches parametrized by their number of statement
 - Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
-- Execution metadata (token, node, failed attempts, etc.) are not available for the momentssion::batch`
 - Access to database events and session events (connection opening/failure, node status update, topology update, schema agreement, etc.) using `tokio::sync::broadcast`
 - No schema metadata (but it can be built as a sidecar service, using dababase schema event and session schema agreement event to trigger refresh)
 - No internal API used for query execution, which means that custom execution can be built without too much effort
@@ -33,7 +33,7 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 ## TODO
 
 - Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
-- Execution metadata (token, node, failed attempts, etc.) are not available for the moment
+- Add execution metadata
 - tracing
 - test, tests, and more tests
 - DOCUMENTATION -_-'
@@ -48,9 +48,17 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 
 I've started some benchmark using https://github.com/pkolaczk/latte, and as expected, this driver performs better than the official one.
 
-Single threaded comparison with local database shows 40% performance improvement for example.
+Single threaded comparison with local database shows 40% performance improvement for example. The driver also keeps its at-most-one-allocation promise, so memory consumption is obviously lower by a lot.
 
 Fun fact, when benchmark times are similar, mostly because of the database response time, this driver use 30% less CPU time.
+
+## Unsafe
+
+Most of the original unsafe code has been moved into [swap-buffer-queue](https://github.com/wyfo/swap-buffer-queue). `StreamNode` also has been refactored to replace its original unsafe lock-free algorithm with a simple Mutex, as there should be no contention in normal case.
+
+However, [`Write::write_all_vectored`](https://doc.rust-lang.org/std/io/trait.Write.html#method.write_all_vectored) being currently unstable (and thus `tokio::io::AsyncWriteExt::write_all_vectored` too), it's implemented directly in the driver, but it requires an `unsafe` section because [`IoSlice::advance`](hhttps://doc.rust-lang.org/std/io/struct.IoSlice.html#method.advance) is also unstable for the moment. In order to keep the code safe, waiting for the stabilization, this implementation is hidden behind a feature flag, and replaced by a simple loop by default.
+
+(`Write::write_all_vectored` is only used for big payloads which do not fit in the write buffer and are thus allocated)
 
 ## What's next
 

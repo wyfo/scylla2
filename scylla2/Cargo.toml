@@ -8,12 +8,13 @@ edition = "2021"
 [features]
 bigdecimal = ["scylla2-cql/bigdecimal", "num-bigint"]
 chrono = ["scylla2-cql/chrono"]
-cql_value = ["scylla2-cql/cql_value", "bigdecimal"]
+cql-value = ["scylla2-cql/cql-value", "bigdecimal"]
 num-bigint = ["scylla2-cql/num-bigint"]
 lz4 = ["scylla2-cql/lz4"]
 snappy = ["scylla2-cql/snappy"]
 ssl = ["dep:tokio-openssl", "dep:openssl"]
 string = ["scylla2-cql/string"]
+write-all-vectored = ["scylla2-cql/write-all-vectored"]
 
 [dependencies]
 arc-swap = "1"

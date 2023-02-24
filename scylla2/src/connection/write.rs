@@ -6,12 +6,13 @@ use scylla2_cql::{
         UncompressedFrameHeader, FRAME_COMPRESSED_HEADER_SIZE, FRAME_MAX_LENGTH,
         FRAME_TRAILER_SIZE, FRAME_UNCOMPRESSED_HEADER_SIZE,
     },
+    protocol::write::AsyncWriteAllVectored,
     ProtocolVersion,
 };
 use swap_buffer_queue::{write::BytesSlice, write_vectored::VectoredSlice};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::{connection::Connection, utils::AsyncWriteAllVectored};
+use crate::connection::Connection;
 
 impl Connection {
     pub(super) async fn write_task(&self, mut writer: impl AsyncWrite + Unpin) -> io::Result<()> {

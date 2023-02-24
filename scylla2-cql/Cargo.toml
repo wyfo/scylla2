@@ -7,10 +7,11 @@ edition = "2021"
 
 [features]
 bigdecimal = ["dep:bigdecimal", "num-bigint"]
-cql_value = ["bigdecimal"]
+cql-value = ["bigdecimal"]
 lz4 = ["dep:lz4_flex"]
 snappy = ["dep:snap"]
 protocol = ["dep:async-trait", "dep:tokio"]
+write-all-vectored = []
 
 [dependencies]
 async-trait = { version = "0.1", optional = true }

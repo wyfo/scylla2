@@ -2,6 +2,7 @@
 #![deny(clippy::dbg_macro)]
 #![deny(clippy::map_unwrap_or)]
 #![deny(clippy::semicolon_if_nothing_returned)]
+#![cfg_attr(not(feature = "write-all-vectored"), forbid(unsafe_code))]
 
 extern crate core;
 
