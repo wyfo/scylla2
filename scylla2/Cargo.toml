@@ -18,7 +18,6 @@ write-all-vectored = ["scylla2-cql/write-all-vectored"]
 
 [dependencies]
 arc-swap = "1"
-async-recursion = "1"
 async-trait = "0.1"
 bytes = "1"
 derivative = "2"

@@ -500,7 +500,6 @@ impl Node {
         }
     }
 
-    #[async_recursion::async_recursion]
     async fn open_connection(
         self: &Arc<Node>,
         config: &NodeConfig,
@@ -508,7 +507,7 @@ impl Node {
         supported_shard_aware_port: Option<u16>,
     ) -> Option<(TcpConnection, Supported)> {
         let (address, shard_aware_port) = self.address.lock().unwrap().unwrap();
-        let shard_info = match (
+        let mut shard_info = match (
             shard,
             self.sharder(),
             (shard_aware_port, supported_shard_aware_port),
@@ -524,32 +523,33 @@ impl Node {
             }),
             _ => None,
         };
-        match TcpConnection::open(
-            address,
-            shard_info,
-            config.init_socket.as_ref(),
-            #[cfg(feature = "ssl")]
-            config.ssl_context.as_ref(),
-            config.connect_timeout,
-            self.protocol_version().unwrap(),
-        )
-        .await
-        {
-            Ok((conn, supported)) => Some((conn, supported)),
-            Err(err) => {
-                if shard.is_some() {
-                    let without_shard = self.open_connection(config, None, None).await;
-                    if without_shard.is_some() {
-                        return without_shard;
+        // loop because no async recursion
+        loop {
+            return match TcpConnection::open(
+                address,
+                shard_info,
+                config.init_socket.as_ref(),
+                #[cfg(feature = "ssl")]
+                config.ssl_context.as_ref(),
+                config.connect_timeout,
+                self.protocol_version().unwrap(),
+            )
+            .await
+            {
+                Ok((conn, supported)) => Some((conn, supported)),
+                Err(err) => {
+                    if shard_info.is_some() {
+                        shard_info = None;
+                        continue;
                     }
+                    let event = SessionEvent::ConnectionFailed {
+                        node: self.clone(),
+                        error: Arc::new(err),
+                    };
+                    self.session_events.send(event).ok();
+                    None
                 }
-                let event = SessionEvent::ConnectionFailed {
-                    node: self.clone(),
-                    error: Arc::new(err),
-                };
-                self.session_events.send(event).ok();
-                None
-            }
+            };
         }
     }
 }
