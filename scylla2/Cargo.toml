@@ -20,7 +20,6 @@ write-all-vectored = ["scylla2-cql/write-all-vectored"]
 arc-swap = "1"
 async-trait = "0.1"
 bytes = "1"
-derivative = "2"
 futures = "0.3"
 once_cell = "1"
 openssl = { version = "0.10", optional = true }

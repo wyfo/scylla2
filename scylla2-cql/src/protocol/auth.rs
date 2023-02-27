@@ -1,9 +1,9 @@
-use std::{future::Future, net::SocketAddr};
+use std::{fmt, net::SocketAddr};
 
 use crate::error::AuthenticationError;
 
 #[async_trait::async_trait]
-pub trait AuthenticationProtocol: Send + Sync {
+pub trait AuthenticationProtocol: fmt::Debug + Send + Sync {
     async fn authenticate(
         &self,
         authenticator: &str,
@@ -12,21 +12,7 @@ pub trait AuthenticationProtocol: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait AuthenticationSession: Send + Sync {
+pub trait AuthenticationSession: fmt::Debug + Send + Sync {
     async fn challenge(&mut self, bytes: Option<Box<[u8]>>)
         -> Result<Vec<u8>, AuthenticationError>;
-}
-
-#[async_trait::async_trait]
-impl<F, Fut> AuthenticationSession for F
-where
-    F: Send + Sync + FnMut(Option<Box<[u8]>>) -> Fut,
-    Fut: Future<Output = Result<Vec<u8>, AuthenticationError>> + Send,
-{
-    async fn challenge(
-        &mut self,
-        bytes: Option<Box<[u8]>>,
-    ) -> Result<Vec<u8>, AuthenticationError> {
-        self(bytes).await
-    }
 }

@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use crate::{
     auth::UserPassword,
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
-    error::{BoxedError, SessionError},
+    error::SessionError,
     session::{
         event::{SessionEvent, SessionEventType},
         Session,
@@ -22,18 +22,15 @@ use crate::{
     statement::config::StatementConfig,
     topology::{
         node::PoolSize,
-        peer::{AddressTranslator, NodeDistance, NodeLocalizer, Peer, ShardAwarePort},
+        peer::{AddressTranslator, AllRemote, ConnectionPort, LocalDatacenter, NodeLocalizer},
     },
     DatabaseEvent, DatabaseEventType,
 };
 
-#[derive(derivative::Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct SessionConfig {
-    #[derivative(Debug = "ignore")]
     pub address_translator: Arc<dyn AddressTranslator>,
-    #[derivative(Debug = "ignore")]
     pub authentication_protocol: Option<Arc<dyn AuthenticationProtocol>>,
     pub auto_await_schema_agreement_timeout: Option<Duration>,
     pub compression_minimal_size: usize,
@@ -42,7 +39,6 @@ pub struct SessionConfig {
     pub database_event_channel: broadcast::Sender<DatabaseEvent>,
     pub database_event_filter: Option<HashSet<DatabaseEventType>>,
     pub minimal_protocol_version: Option<ProtocolVersion>,
-    #[derivative(Debug = "ignore")]
     pub node_localizer: Arc<dyn NodeLocalizer>,
     pub nodes: Vec<NodeAddress>,
     pub orphan_count_threshold: usize,
@@ -72,11 +68,7 @@ impl Default for SessionConfig {
         // requires it (not Scylla).
         startup_options.insert("CQL_VERSION".into(), "4.0.0".into());
         Self {
-            address_translator: Arc::new(
-                |ip: IpAddr| -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
-                    Ok(((ip, 9042).into(), None))
-                },
-            ),
+            address_translator: Arc::new(ConnectionPort(9042)),
             authentication_protocol: None,
             auto_await_schema_agreement_timeout: Some(Duration::from_secs(60)),
             compression_minimal_size: 1 << 17,
@@ -85,7 +77,7 @@ impl Default for SessionConfig {
             database_event_channel: broadcast::channel(10).0,
             database_event_filter: None,
             minimal_protocol_version: None,
-            node_localizer: Arc::new(|_: &Peer| NodeDistance::Remote),
+            node_localizer: Arc::new(AllRemote),
             nodes: Vec::default(),
             orphan_count_threshold: usize::MAX,
             orphan_count_threshold_delay: Duration::from_secs(1),
@@ -188,27 +180,6 @@ impl SessionConfig {
         self
     }
 
-    pub fn connection_retry_exponential(
-        mut self,
-        initial_delay: Duration,
-        max_delay: Duration,
-        mult: u32,
-    ) -> Self {
-        self.connection_local =
-            self.connection_local
-                .retry_exponential(initial_delay, max_delay, mult);
-        self.connection_remote =
-            self.connection_remote
-                .retry_exponential(initial_delay, max_delay, mult);
-        self
-    }
-
-    pub fn connection_retry_interval(mut self, retry_interval: Duration) -> Self {
-        self.connection_local = self.connection_local.retry_interval(retry_interval);
-        self.connection_remote = self.connection_remote.retry_interval(retry_interval);
-        self
-    }
-
     pub fn connection_write_buffer_size(mut self, size: usize) -> Self {
         self.connection_local = self.connection_local.write_buffer_size(size);
         self.connection_remote = self.connection_remote.write_buffer_size(size);
@@ -240,13 +211,7 @@ impl SessionConfig {
     }
 
     pub fn datacenter(self, datacenter: impl Into<String>) -> Self {
-        let datacenter = datacenter.into();
-        self.node_localizer(move |peer: &Peer| {
-            peer.datacenter
-                .as_ref()
-                .filter(|dc| *dc == &datacenter)
-                .map_or(NodeDistance::Remote, |_| NodeDistance::Local)
-        })
+        self.node_localizer(LocalDatacenter(datacenter.into()))
     }
 
     pub fn driver_name(self, name: impl Into<String>) -> Self {

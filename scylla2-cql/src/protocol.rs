@@ -105,29 +105,25 @@ pub async fn startup(
     let Some(auth) = authentication else {
         return Err(AuthenticationError::AuthenticationRequired(authenticator).into());
     };
-    let (mut token, session) = auth.authenticate(&authenticator, address).await?;
-    let mut session = session.unwrap_or_else(|| {
-        Box::new(|_| async {
-            Err(AuthenticationError::ChallengeRequested(
-                authenticator.clone(),
-            ))
-        })
-    });
+    let (mut token, mut session) = auth.authenticate(&authenticator, address).await?;
     loop {
-        match execute_before_startup(
+        let auth_res = execute_before_startup(
             &mut connection,
             version,
             Default::default(),
             AuthResponse { token },
         )
-        .await?
-        .body
-        {
-            ResponseBody::AuthSuccess(_) => return Ok(()),
-            ResponseBody::AuthChallenge(AuthChallenge { token: tk, .. }) => {
+        .await?;
+        match (auth_res.body, &mut session) {
+            (ResponseBody::AuthSuccess(_), _) => return Ok(()),
+            (ResponseBody::AuthChallenge(AuthChallenge { token: tk, .. }), Some(session)) => {
                 token = session.challenge(tk).await?;
             }
-            other => return Err(invalid_response(other)),
+            (ResponseBody::AuthChallenge(_), None) => {
+                return Err(AuthenticationError::ChallengeRequested(authenticator.clone()).into())
+            }
+
+            (other, _) => return Err(invalid_response(other)),
         }
     }
 }

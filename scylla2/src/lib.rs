@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod connection;
+pub mod debug;
 pub mod error;
 pub mod execution;
 pub mod session;

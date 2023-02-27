@@ -1,5 +1,5 @@
 use std::{
-    io,
+    fmt, io,
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
@@ -7,7 +7,7 @@ use std::{
 use scylla2_cql::{error::BoxedError, response::result::rows::FromRow};
 use tokio::sync::mpsc;
 
-use crate::{topology::partitioner::Token, utils::other_error, SessionEvent};
+use crate::{debug::Closure, topology::partitioner::Token, utils::other_error, SessionEvent};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -41,23 +41,23 @@ pub enum ShardAwarePort {
 // Is there an interest for AddressTranslator to take &Peer instead of IpAddr?
 
 #[async_trait::async_trait]
-pub trait AddressTranslator: Send + Sync {
+pub trait AddressTranslator: fmt::Debug + Send + Sync {
     async fn translate(
         &self,
         address: IpAddr,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>;
 }
 
+#[derive(Debug)]
+pub struct ConnectionPort(pub u16);
+
 #[async_trait::async_trait]
-impl<F> AddressTranslator for F
-where
-    F: Send + Sync + Fn(IpAddr) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>,
-{
+impl AddressTranslator for ConnectionPort {
     async fn translate(
         &self,
         address: IpAddr,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
-        self(address)
+        Ok(((address, self.0).into(), None))
     }
 }
 
@@ -94,17 +94,36 @@ pub enum NodeDistance {
     Ignored,
 }
 
-#[async_trait::async_trait]
-pub trait NodeLocalizer: Send + Sync {
-    async fn distance(&self, peer: &Peer) -> NodeDistance;
+pub trait NodeLocalizer: fmt::Debug + Send + Sync {
+    fn distance(&self, peer: &Peer) -> NodeDistance;
 }
 
-#[async_trait::async_trait]
-impl<F> NodeLocalizer for F
+impl<F> NodeLocalizer for Closure<F>
 where
     F: Send + Sync + Fn(&Peer) -> NodeDistance,
 {
-    async fn distance(&self, peer: &Peer) -> NodeDistance {
-        self(peer)
+    fn distance(&self, peer: &Peer) -> NodeDistance {
+        self.0(peer)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AllRemote;
+
+impl NodeLocalizer for AllRemote {
+    fn distance(&self, _peer: &Peer) -> NodeDistance {
+        NodeDistance::Remote
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct LocalDatacenter(pub(crate) String);
+
+impl NodeLocalizer for LocalDatacenter {
+    fn distance(&self, peer: &Peer) -> NodeDistance {
+        peer.datacenter
+            .as_ref()
+            .filter(|dc| *dc == &self.0)
+            .map_or(NodeDistance::Remote, |_| NodeDistance::Local)
     }
 }
