@@ -539,27 +539,3 @@ impl<T> From<MaybeValue<T>> for Option<T> {
         val.value()
     }
 }
-
-struct Raw<'a>(&'a [u8]);
-
-impl<'a> ReadValue<'a> for Raw<'a> {
-    fn check_type(_cql_type: &CqlType) -> Result<(), TypeError> {
-        Ok(())
-    }
-
-    fn read_value(slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(Raw(slice))
-    }
-}
-
-struct RawBytes(Bytes);
-
-impl<'a> ReadValue<'a> for RawBytes {
-    fn check_type(_cql_type: &CqlType) -> Result<(), TypeError> {
-        Ok(())
-    }
-
-    fn read_value(slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(RawBytes(envelope.slice_ref(slice)))
-    }
-}
