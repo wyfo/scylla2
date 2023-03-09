@@ -92,7 +92,7 @@ pub struct Metadata {
     pub columns_count: u32,
     pub paging_state: Option<PagingState>,
     pub new_metadata_id: Option<Arc<[u8]>>,
-    pub column_specs: Option<Box<[ColumnSpec]>>,
+    pub column_specs: Option<Arc<[ColumnSpec]>>,
 }
 
 impl Metadata {

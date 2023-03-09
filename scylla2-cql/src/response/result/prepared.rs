@@ -21,12 +21,12 @@ pub enum PreparedFlag {
     GlobalTableSpec = 0x0001,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Prepared {
     pub id: Arc<[u8]>,
-    pub result_metadata_id: Option<Box<[u8]>>,
-    pub pk_indexes: Box<[u16]>,
-    pub column_specs: Box<[ColumnSpec]>,
+    pub result_metadata_id: Option<Arc<[u8]>>,
+    pub pk_indexes: Arc<[u16]>,
+    pub column_specs: Arc<[ColumnSpec]>,
     pub result_specs: Option<Arc<[ColumnSpec]>>,
     pub is_lwt: bool,
 }
@@ -49,8 +49,7 @@ impl Prepared {
         let pk_indexes = (0..pk_count)
             .map(|_| i16::read_cql(buf))
             .map(|pki| pki?.try_into().map_err(invalid_data))
-            .collect::<Result<Vec<_>, io::Error>>()?
-            .into_boxed_slice();
+            .collect::<Result<_, io::Error>>()?;
         let global_table_spec = if flags.contains(PreparedFlag::GlobalTableSpec) {
             let keyspace = <&str>::read_cql(buf)?;
             let table = <&str>::read_cql(buf)?;
