@@ -240,10 +240,12 @@ impl Session {
             let local = topology
                 .local_nodes()
                 .choose_multiple(&mut rand::thread_rng(), topology.local_nodes().len())
+                .filter(|node| node.is_up())
                 .map(|node| (node, &self.0.node_config_local));
             let remote = topology
                 .remote_nodes()
                 .choose_multiple(&mut rand::thread_rng(), topology.remote_nodes().len())
+                .filter(|node| node.is_up())
                 .map(|node| (node, &self.0.node_config_remote));
             for (node, node_config) in local.chain(remote) {
                 match ControlConnection::open(
