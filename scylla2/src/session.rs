@@ -589,7 +589,11 @@ impl Session {
 
     async fn topology_node(&self, topology: &Topology, peer: Peer) -> Option<(Arc<Node>, bool)> {
         let distance = self.0.node_localizer.distance(&peer);
-        if let Some(node) = topology.nodes_by_rpc_address().get(&peer.rpc_address) {
+        if let Some(node) = topology
+            .nodes_by_rpc_address()
+            .get(&peer.rpc_address)
+            .filter(|node| !matches!(node.status(), NodeStatus::Disconnected(_)))
+        {
             if node.peer() != &peer {
                 #[cfg(feature = "tracing")]
                 tracing::info!(
