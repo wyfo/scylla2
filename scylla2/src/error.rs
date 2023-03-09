@@ -22,14 +22,14 @@ pub enum SessionError {
     #[error(transparent)]
     InvalidKeyspace(#[from] InvalidKeyspace),
     #[error(transparent)]
-    ConnectionError(#[from] ConnectionError),
+    Connection(#[from] ConnectionError),
 }
 
 impl From<UseKeyspaceError> for SessionError {
     fn from(value: UseKeyspaceError) -> Self {
         match value {
             UseKeyspaceError::InvalidKeyspace(error) => error.into(),
-            UseKeyspaceError::Database(error) => Self::ConnectionError(error.into()),
+            UseKeyspaceError::Database(error) => Self::Connection(error.into()),
         }
     }
 }
@@ -65,7 +65,7 @@ pub enum ExecutionResultError {
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error(transparent)]
-    PartitionKeyError(#[from] PartitionKeyError),
+    PartitionKey(#[from] PartitionKeyError),
     #[error(transparent)]
     InvalidRequest(#[from] InvalidRequest),
     #[error("No connection available")]
