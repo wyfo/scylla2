@@ -27,8 +27,8 @@ use crate::{
         Connection, OwnedConnection,
     },
     error::{ConnectionExecutionError, Disconnected, ExecutionError},
+    event::SessionEventHandler,
     execution::peers_and_local,
-    session::event::SessionEvent,
     statement::query::cql_query,
     topology::{
         node::worker::NodeWorker,
@@ -171,7 +171,8 @@ pub struct Node {
     pool_size: Option<PoolSize>,
     connection_pool: OnceCell<ConnectionPool>,
     status_notify: Notify,
-    session_events: mpsc::UnboundedSender<SessionEvent>,
+    disconnection_channel: mpsc::UnboundedSender<NodeDisconnectionReason>,
+    session_event_handler: Option<Arc<dyn SessionEventHandler>>,
     node_events: mpsc::UnboundedSender<NodeEvent>,
     schema_agreement_interval: Duration,
 }
@@ -199,7 +200,8 @@ impl Node {
         distance: NodeDistance,
         config: Option<Arc<NodeConfig>>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
-        session_events: mpsc::UnboundedSender<SessionEvent>,
+        disconnection_channel: mpsc::UnboundedSender<NodeDisconnectionReason>,
+        session_event_handler: Option<Arc<dyn SessionEventHandler>>,
         schema_agreement_interval: Duration,
     ) -> Arc<Self> {
         let (node_events_tx, node_events_rx) = mpsc::unbounded_channel();
@@ -211,7 +213,8 @@ impl Node {
             pool_size: config.as_ref().map(|c| c.pool_size),
             connection_pool: OnceCell::new(),
             status_notify: Notify::new(),
-            session_events,
+            disconnection_channel,
+            session_event_handler,
             node_events: node_events_tx,
             schema_agreement_interval,
         });
@@ -350,11 +353,8 @@ impl Node {
             peers_and_local(peers.ok()?, local.ok()?, |(uuid,)| uuid)?;
         Ok(if schema_versions.len() == 1 {
             let schema_version = schema_versions.into_iter().next().unwrap();
-            let event = SessionEvent::SchemaAgreement {
-                schema_version,
-                rpc_address: self.peer.rpc_address,
-            };
-            self.session_events.send(event).ok();
+            self.session_event_handler
+                .schema_agreement(schema_version, self.peer.rpc_address);
             Some(schema_version)
         } else {
             None
@@ -375,11 +375,7 @@ impl Node {
     }
 
     fn update_status(self: &Arc<Self>, status: NodeStatus) {
-        let event = SessionEvent::NodeStatusUpdate {
-            node: self.clone(),
-            status,
-        };
-        self.session_events.send(event).ok();
+        self.session_event_handler.node_status_update(self, status);
         self.status_notify.notify_waiters();
     }
 
@@ -396,6 +392,7 @@ impl Node {
         self.active_connection_count
             .store(disconnected, Ordering::Relaxed);
         self.update_status(NodeStatus::Disconnected(reason));
+        self.disconnection_channel.send(reason).ok();
     }
 
     fn update_active_connection_count(self: &Arc<Self>, update: isize) {
@@ -428,13 +425,12 @@ impl Node {
     }
 
     async fn update_address(self: &Arc<Node>, address_translator: &dyn AddressTranslator) {
-        let Some(address) = address_translator.translate_or_warn(self.peer.rpc_address, &self.session_events).await.ok() else {
+        let Some(address) = address_translator.translate_or_warn(self.peer.rpc_address, &self.session_event_handler).await.ok() else {
             return
         };
         let prev_addr = self.address.lock().unwrap().replace(address);
         if prev_addr.map_or(false, |prev| prev == address) {
-            let event = SessionEvent::NodeAddressUpdate { node: self.clone() };
-            self.session_events.send(event).ok();
+            self.session_event_handler.node_address_update(self);
         }
     }
 
@@ -481,11 +477,7 @@ impl Node {
                             first_connection = false;
                             self.update_status(NodeStatus::Down);
                         }
-                        let event = SessionEvent::ConnectionFailed {
-                            node: self.clone(),
-                            error: Arc::new(err),
-                        };
-                        self.session_events.send(event).ok();
+                        self.session_event_handler.connection_failed(&self, err);
                     }
                 }
             }
@@ -542,11 +534,7 @@ impl Node {
                         shard_info = None;
                         continue;
                     }
-                    let event = SessionEvent::ConnectionFailed {
-                        node: self.clone(),
-                        error: Arc::new(err),
-                    };
-                    self.session_events.send(event).ok();
+                    self.session_event_handler.connection_failed(self, err);
                     None
                 }
             };

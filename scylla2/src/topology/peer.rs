@@ -1,13 +1,13 @@
 use std::{
     fmt, io,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
 };
 
 use scylla2_cql::{error::BoxedError, response::result::rows::FromRow};
-use tokio::sync::mpsc;
 
-use crate::{debug::Closure, topology::partitioner::Token, utils::other_error, SessionEvent};
+use crate::{
+    debug::Closure, event::SessionEventHandler, topology::partitioner::Token, utils::other_error,
+};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -66,7 +66,7 @@ pub(crate) trait AddressTranslatorExt: AddressTranslator {
     async fn translate_or_warn(
         &self,
         address: IpAddr,
-        session_events: &mpsc::UnboundedSender<SessionEvent>,
+        event_handler: &impl SessionEventHandler,
     ) -> io::Result<(SocketAddr, Option<ShardAwarePort>)> {
         match self.translate(address).await {
             Ok(ok) => Ok(ok),
@@ -74,11 +74,7 @@ pub(crate) trait AddressTranslatorExt: AddressTranslator {
                 #[cfg(feature = "tracing")]
                 tracing::warn!(%address, error, "Address translation failed");
                 let error_str = format!("Address translation failed: {error}");
-                let event = SessionEvent::AddressTranslationFailed {
-                    rpc_address: address,
-                    error: Arc::new(error),
-                };
-                session_events.send(event).ok();
+                event_handler.address_translation_failed(address, error);
                 Err(other_error(error_str))
             }
         }

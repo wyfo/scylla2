@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -9,22 +9,18 @@ use scylla2_cql::{
     frame::compression::Compression, protocol::auth::AuthenticationProtocol, Consistency,
     ProtocolVersion, SerialConsistency,
 };
-use tokio::sync::broadcast;
 
 use crate::{
     auth::UserPassword,
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
     error::SessionError,
-    session::{
-        event::{SessionEvent, SessionEventType},
-        Session,
-    },
+    event::{DatabaseEventHandler, SessionEventHandler},
+    session::Session,
     statement::config::StatementConfig,
     topology::{
         node::PoolSize,
         peer::{AddressTranslator, AllRemote, ConnectionPort, LocalDatacenter, NodeLocalizer},
     },
-    DatabaseEvent, DatabaseEventType,
 };
 
 #[derive(Debug)]
@@ -36,8 +32,7 @@ pub struct SessionConfig {
     pub compression_minimal_size: usize,
     pub connection_local: ConnectionConfig,
     pub connection_remote: ConnectionConfig,
-    pub database_event_channel: broadcast::Sender<DatabaseEvent>,
-    pub database_event_filter: Option<HashSet<DatabaseEventType>>,
+    pub database_event_handler: Option<Arc<dyn DatabaseEventHandler>>,
     pub minimal_protocol_version: Option<ProtocolVersion>,
     pub node_localizer: Arc<dyn NodeLocalizer>,
     pub nodes: Vec<NodeAddress>,
@@ -46,8 +41,7 @@ pub struct SessionConfig {
     pub refresh_topology_interval: Option<Duration>,
     pub register_for_schema_event: bool,
     pub schema_agreement_interval: Duration,
-    pub session_event_channel: broadcast::Sender<SessionEvent>,
-    pub session_event_filter: Option<HashSet<SessionEventType>>,
+    pub session_event_handler: Option<Arc<dyn SessionEventHandler>>,
     #[cfg(feature = "ssl")]
     pub ssl_context: Option<openssl::ssl::SslContext>,
     pub startup_options: HashMap<String, String>,
@@ -74,8 +68,7 @@ impl Default for SessionConfig {
             compression_minimal_size: 1 << 17,
             connection_local: ConnectionConfig::default(),
             connection_remote: ConnectionConfig::default(),
-            database_event_channel: broadcast::channel(10).0,
-            database_event_filter: None,
+            database_event_handler: None,
             minimal_protocol_version: None,
             node_localizer: Arc::new(AllRemote),
             nodes: Vec::default(),
@@ -84,8 +77,7 @@ impl Default for SessionConfig {
             refresh_topology_interval: None,
             register_for_schema_event: false,
             schema_agreement_interval: Duration::from_millis(200),
-            session_event_channel: broadcast::channel(10).0,
-            session_event_filter: None,
+            session_event_handler: None,
             #[cfg(feature = "ssl")]
             ssl_context: None,
             startup_options,
@@ -186,16 +178,8 @@ impl SessionConfig {
         self
     }
 
-    pub fn database_event_channel(mut self, channel: broadcast::Sender<DatabaseEvent>) -> Self {
-        self.database_event_channel = channel;
-        self
-    }
-
-    pub fn database_event_filter(
-        mut self,
-        event_types: impl IntoIterator<Item = DatabaseEventType>,
-    ) -> Self {
-        self.database_event_filter = Some(event_types.into_iter().collect());
+    pub fn database_event_handler(mut self, handler: impl DatabaseEventHandler + 'static) -> Self {
+        self.database_event_handler = Some(Arc::new(handler));
         self
     }
 
@@ -265,16 +249,8 @@ impl SessionConfig {
         self
     }
 
-    pub fn session_event_channel(mut self, channel: broadcast::Sender<SessionEvent>) -> Self {
-        self.session_event_channel = channel;
-        self
-    }
-
-    pub fn session_event_filter(
-        mut self,
-        event_types: impl IntoIterator<Item = SessionEventType>,
-    ) -> Self {
-        self.session_event_filter = Some(event_types.into_iter().collect());
+    pub fn session_event_handler(mut self, handler: impl SessionEventHandler + 'static) -> Self {
+        self.session_event_handler = Some(Arc::new(handler));
         self
     }
 

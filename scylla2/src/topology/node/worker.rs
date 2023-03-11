@@ -11,13 +11,13 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     connection::{tcp::TcpConnection, Connection, ConnectionRef},
     error::Disconnected,
+    event::SessionEventHandler,
     statement::query::cql_query,
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason, NodeEvent},
         sharding::Sharder,
     },
     utils::RepeatLast,
-    SessionEvent,
 };
 
 const EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER: usize = 10;
@@ -240,20 +240,13 @@ async fn start_connection(
     let conn_ref = ConnectionRef::new(node.clone(), conn_index);
     let conn = conn_ref.get();
     if let Err(err) = startup_and_use(&node, &mut tcp_conn, conn, &config, &keyspace_used).await {
-        let event = SessionEvent::ConnectionFailed {
-            node: node.clone(),
-            error: Arc::new(err),
-        };
-        node.session_events.send(event).ok();
+        node.session_event_handler.connection_failed(&node, err);
         let event = ConnectionEvent::Closed(conn_index, true);
         conn_events.send(event).ok();
+        return;
     }
-    let event = SessionEvent::ConnectionOpened {
-        node: node.clone(),
-        shard,
-        index: conn_index,
-    };
-    node.session_events.send(event).ok();
+    node.session_event_handler
+        .connection_opened(&node, shard, conn_index);
     node.update_active_connection_count(1);
     let task_res = conn
         .task(
@@ -265,15 +258,14 @@ async fn start_connection(
         )
         .await;
     let too_many_orphan_streams = *task_res.as_ref().unwrap_or(&false);
-    let event = SessionEvent::ConnectionClosed {
-        node: node.clone(),
-        shard,
-        index: conn_index,
-        too_many_orphan_streams,
-        error: task_res.err().map(Arc::new),
-    };
     node.update_active_connection_count(-1);
-    node.session_events.send(event).ok();
+    node.session_event_handler.connection_closed(
+        &node,
+        shard,
+        conn_index,
+        too_many_orphan_streams,
+        task_res.err(),
+    );
     let event = ConnectionEvent::Closed(conn_index, !too_many_orphan_streams);
     conn_events.send(event).ok();
 }

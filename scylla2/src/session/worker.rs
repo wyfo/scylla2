@@ -1,103 +1,134 @@
-use std::{convert::Infallible, sync::Weak, time::Duration};
+use std::{future::Future, sync::Weak, time::Duration};
 
+use rand::seq::SliceRandom;
 use scylla2_cql::event::{Event, StatusChangeEvent};
 use tokio::sync::mpsc;
 
 use crate::{
-    session::{event::SessionEventType, Session, SessionEvent, SessionInner},
-    topology::{
-        node::{NodeDisconnectionReason, NodeStatus},
-        peer::NodeDistance,
-    },
+    event::{DatabaseEventHandler, SessionEventHandler},
+    session::{Session, SessionInner},
+    topology::node::NodeDisconnectionReason,
 };
 
-pub(super) async fn database_event_worker(
-    session: Weak<SessionInner>,
-    mut database_events_internal: mpsc::UnboundedReceiver<Event>,
-) -> Option<Infallible> {
+pub(super) async fn event_worker(
+    inner: Weak<SessionInner>,
+    mut events: mpsc::UnboundedReceiver<Event>,
+) {
     loop {
-        let event = database_events_internal.recv().await?;
-        let session = Session(session.upgrade()?);
-        match &event {
-            Event::TopologyChange(_) => {
-                let session = session.clone();
+        let event = events.recv().await;
+        let Some(session) = inner.upgrade().map(Session) else {
+            return;
+        };
+        match event {
+            Some(Event::TopologyChange(event)) => {
+                session.0.database_event_handler.topology_change(event);
                 tokio::spawn(async move { session.refresh_topology().await });
             }
-            Event::StatusChange(StatusChangeEvent::Up(addr)) => {
+            Some(Event::StatusChange(StatusChangeEvent::Up(addr))) => {
+                session
+                    .0
+                    .database_event_handler
+                    .status_change(StatusChangeEvent::Up(addr));
                 if let Some(node) = session.topology().nodes_by_rpc_address().get(&addr.ip()) {
                     node.try_reconnect().ok();
                 } else {
-                    let session = session.clone();
                     tokio::spawn(async move { session.refresh_topology().await });
                 }
             }
-            _ => {}
-        }
-        if event.r#type().is_none()
-            || session
-                .0
-                .database_event_filter
-                .as_ref()
-                .map_or(true, |f| f.contains(&event.r#type().unwrap()))
-        {
-            session.0.database_events.send(event).ok();
+            Some(Event::StatusChange(event)) => {
+                session.0.database_event_handler.status_change(event);
+            }
+
+            Some(Event::SchemaChange(event)) => {
+                session.0.database_event_handler.schema_change(event);
+            }
+            Some(_) => {}
+            None => {
+                let (events_tx, event_rx) = mpsc::unbounded_channel();
+                events = event_rx;
+                tokio::spawn(async move { reopen_control_connection(&session.0, events_tx).await });
+            }
         }
     }
 }
 
-pub(super) async fn session_event_worker(
-    session: Weak<SessionInner>,
-    mut session_events_internal: mpsc::UnboundedReceiver<SessionEvent>,
-) -> Option<Infallible> {
+async fn reopen_control_connection(inner: &SessionInner, events: mpsc::UnboundedSender<Event>) {
+    for delay in inner
+        .node_config_local
+        .reconnection_policy
+        .reconnection_delays()
+    {
+        let topology = inner.topology.load_full();
+        let local = topology
+            .local_nodes()
+            .choose_multiple(&mut rand::thread_rng(), topology.local_nodes().len())
+            .filter(|node| node.is_up())
+            .map(|node| (node, &inner.node_config_local));
+        let remote = topology
+            .remote_nodes()
+            .choose_multiple(&mut rand::thread_rng(), topology.remote_nodes().len())
+            .filter(|node| node.is_up())
+            .map(|node| (node, &inner.node_config_remote));
+        for (node, node_config) in local.chain(remote) {
+            let Some(address )= node.address() else {
+                continue;
+            };
+            match inner
+                .control_connection
+                .open(
+                    Some(node.peer().rpc_address),
+                    address,
+                    node_config,
+                    inner.register_for_schema_event,
+                    events.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    inner.control_notify.notify_waiters();
+                    return;
+                }
+                Err(error) => {
+                    inner
+                        .session_event_handler
+                        .control_connection_failed(address, error);
+                }
+            }
+        }
+        tokio::time::sleep(delay).await;
+    }
+}
+
+pub(super) async fn node_worker(
+    inner: Weak<SessionInner>,
+    mut node_disconnections: mpsc::UnboundedReceiver<NodeDisconnectionReason>,
+) {
     loop {
-        let event = session_events_internal.recv().await?;
-        let session = Session(session.upgrade()?);
-        match &event {
-            SessionEvent::NodeStatusUpdate {
-                status:
-                    NodeStatus::Disconnected(
-                        NodeDisconnectionReason::ShardingChanged
-                        | NodeDisconnectionReason::ExtensionsChanged,
-                    ),
-                ..
-            } => {
-                let session = session.clone();
-                tokio::spawn(async move { session.refresh_topology().await });
-            }
-            SessionEvent::ControlConnectionClosed { .. } => {
-                let session = session.clone();
-                tokio::spawn(async move { session.reopen_control_connection().await });
-            }
-            _ => {}
-        }
-        if session
-            .0
-            .session_event_filter
-            .as_ref()
-            .map_or(true, |f| f.contains(&SessionEventType::from(&event)))
+        let reason = node_disconnections.recv().await;
+        let Some(session) = inner.upgrade().map(Session) else {
+            return;
+        };
+        if let Some(
+            NodeDisconnectionReason::ShardingChanged | NodeDisconnectionReason::ExtensionsChanged,
+        ) = reason
         {
-            session.0.session_events.send(event).ok();
+            tokio::spawn(async move { session.refresh_topology().await });
         }
     }
 }
 
-pub(super) async fn heartbeat_worker(
-    session: Weak<SessionInner>,
+pub(super) async fn loop_worker<F>(
+    inner: Weak<SessionInner>,
     interval: Duration,
-    distance: NodeDistance,
-) -> Option<Infallible> {
+    task: impl (Fn(Session) -> F) + Send + Sync + 'static,
+) where
+    F: Future,
+{
     loop {
         tokio::time::sleep(interval).await;
-        Session(session.upgrade()?).send_heartbeat(Some(distance));
-    }
-}
-
-pub(super) async fn refresh_topology_worker(
-    session: Weak<SessionInner>,
-    interval: Duration,
-) -> Option<Infallible> {
-    loop {
-        tokio::time::sleep(interval).await;
-        Session(session.upgrade()?).refresh_topology().await.ok();
+        let Some(session) = inner.upgrade().map(Session) else {
+            return;
+        };
+        task(session).await;
     }
 }

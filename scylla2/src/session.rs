@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt,
     fmt::Formatter,
     future::Future,
@@ -10,14 +10,12 @@ use std::{
 
 use arc_swap::ArcSwap;
 use futures::{stream::FuturesUnordered, StreamExt};
-use rand::seq::SliceRandom;
 use scylla2_cql::{
-    error::{ConnectionError, DatabaseError},
-    event::Event,
+    error::ConnectionError,
     request::prepare::Prepare,
     response::{result::CqlResult, Response, ResponseBody},
 };
-use tokio::sync::{broadcast, mpsc, Notify};
+use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
 use crate::{
@@ -26,14 +24,12 @@ use crate::{
         ConnectionExecutionError, ExecutionError, InvalidKeyspace, OngoingUseKeyspace,
         SessionError, UseKeyspaceError,
     },
+    event::{DatabaseEventHandler, SessionEventHandler},
     execution::ExecutionResult,
     session::{
         config::{NodeAddress, SessionConfig},
-        control::{ControlAddr, ControlConnection, ControlError},
-        event::{SessionEvent, SessionEventType},
-        worker::{
-            database_event_worker, heartbeat_worker, refresh_topology_worker, session_event_worker,
-        },
+        control::ControlConnection,
+        worker::{event_worker, loop_worker, node_worker},
     },
     statement::{
         config::{StatementConfig, StatementOptions},
@@ -50,32 +46,27 @@ use crate::{
         Topology,
     },
     utils::{invalid_response, other_error, resolve_hostname, RandomSliceIter},
-    DatabaseEventType,
 };
 
 pub mod config;
 pub(crate) mod control;
-pub mod event;
-mod worker;
+pub mod worker;
 
 pub(crate) struct SessionInner {
     auto_await_schema_agreement_timeout: Option<Duration>,
-    control_connection: ArcSwap<ControlConnection>,
+    control_connection: ControlConnection,
     control_notify: Notify,
-    database_events: broadcast::Sender<Event>,
-    database_event_internal: mpsc::UnboundedSender<Event>,
-    database_event_filter: Option<HashSet<DatabaseEventType>>,
+    database_event_handler: Option<Arc<dyn DatabaseEventHandler>>,
     keyspace_used: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
     node_config_local: Arc<NodeConfig>,
     node_config_remote: Arc<NodeConfig>,
+    node_disconnections: mpsc::UnboundedSender<NodeDisconnectionReason>,
     node_localizer: Arc<dyn NodeLocalizer>,
     partitioner_cache: tokio::sync::RwLock<HashMap<String, HashMap<String, Partitioner>>>,
     register_for_schema_event: bool,
     ring_cache: RwLock<HashMap<ReplicationStrategy, Ring>>,
     schema_agreement_interval: Duration,
-    session_events: broadcast::Sender<SessionEvent>,
-    session_event_filter: Option<HashSet<SessionEventType>>,
-    session_events_internal: mpsc::UnboundedSender<SessionEvent>,
+    session_event_handler: Option<Arc<dyn SessionEventHandler>>,
     strategy_cache: tokio::sync::RwLock<HashMap<String, ReplicationStrategy>>,
     statement_config: Option<StatementConfig>,
     topology: ArcSwap<Topology>,
@@ -100,8 +91,6 @@ impl fmt::Debug for Session {
 
 impl Session {
     pub async fn new(config: SessionConfig) -> Result<Self, SessionError> {
-        let (session_events_internal_tx, session_events_internal_rx) = mpsc::unbounded_channel();
-        let (database_events_internal_tx, database_events_internal_rx) = mpsc::unbounded_channel();
         let authentication_protocol = config.authentication_protocol;
         let startup_options = Arc::new(config.startup_options);
         let local_heartbeat_interval = config.connection_local.heartbeat_interval;
@@ -128,49 +117,51 @@ impl Session {
         let node_config_local = node_config(config.connection_local);
         let node_config_remote = node_config(config.connection_remote);
 
-        let mut control_conn = Err(SessionError::NoNodes);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let control_connection = ControlConnection::new(config.session_event_handler.clone());
+        let mut control_result = Err(SessionError::NoNodes);
         for node in config.nodes {
-            let addr = match node {
+            let address = match node {
                 NodeAddress::Address(addr) => addr,
                 NodeAddress::Hostname(hostname) => match resolve_hostname(&hostname).await {
                     Ok(addr) => addr,
                     Err(err) => {
-                        control_conn = Err(ConnectionError::Io(err).into());
+                        control_result = Err(ConnectionError::Io(err).into());
                         continue;
                     }
                 },
             };
-            control_conn = ControlConnection::open(
-                ControlAddr::Config(addr),
-                &node_config_local,
-                config.register_for_schema_event,
-                database_events_internal_tx.clone(),
-                session_events_internal_tx.clone(),
-            )
-            .await
-            .map_err(Into::into);
-            if control_conn.is_ok() {
+            control_result = control_connection
+                .open(
+                    None,
+                    address,
+                    &node_config_local,
+                    config.register_for_schema_event,
+                    event_tx.clone(),
+                )
+                .await
+                .map_err(Into::into);
+            if control_result.is_ok() {
                 break;
             }
         }
+        control_result?;
+        let (node_disconnection_tx, node_disconnection_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(SessionInner {
             auto_await_schema_agreement_timeout: config.auto_await_schema_agreement_timeout,
-            control_connection: ArcSwap::from_pointee(control_conn?),
+            control_connection,
             control_notify: Notify::new(),
-            database_events: config.database_event_channel,
-            database_event_internal: database_events_internal_tx,
-            database_event_filter: config.database_event_filter,
+            database_event_handler: config.database_event_handler,
             keyspace_used: Arc::new(tokio::sync::RwLock::new(None)),
             node_config_local,
             node_config_remote,
+            node_disconnections: node_disconnection_tx,
             node_localizer: config.node_localizer,
             partitioner_cache: Default::default(),
             register_for_schema_event: config.register_for_schema_event,
             ring_cache: Default::default(),
             schema_agreement_interval: Default::default(),
-            session_events: config.session_event_channel,
-            session_event_filter: config.session_event_filter,
-            session_events_internal: session_events_internal_tx,
+            session_event_handler: config.session_event_handler,
             strategy_cache: Default::default(),
             statement_config: config.statement_config,
             topology: Default::default(),
@@ -178,30 +169,22 @@ impl Session {
         });
         let session = Self(inner);
         let weak = Arc::downgrade(&session.0);
-        tokio::spawn(session_event_worker(
-            weak.clone(),
-            session_events_internal_rx,
-        ));
-        tokio::spawn(database_event_worker(
-            weak.clone(),
-            database_events_internal_rx,
-        ));
+        tokio::spawn(event_worker(weak.clone(), event_rx));
+        tokio::spawn(node_worker(weak.clone(), node_disconnection_rx));
         if let Some(interval) = local_heartbeat_interval {
-            tokio::spawn(heartbeat_worker(
-                weak.clone(),
-                interval,
-                NodeDistance::Local,
-            ));
+            tokio::spawn(loop_worker(weak.clone(), interval, |session| async move {
+                session.send_heartbeat(Some(NodeDistance::Local));
+            }));
         }
         if let Some(interval) = remote_heartbeat_interval {
-            tokio::spawn(heartbeat_worker(
-                weak.clone(),
-                interval,
-                NodeDistance::Remote,
-            ));
+            tokio::spawn(loop_worker(weak.clone(), interval, |session| async move {
+                session.send_heartbeat(Some(NodeDistance::Remote));
+            }));
         }
         if let Some(interval) = config.refresh_topology_interval {
-            tokio::spawn(refresh_topology_worker(weak.clone(), interval));
+            tokio::spawn(loop_worker(weak.clone(), interval, |session| async move {
+                session.refresh_topology().await
+            }));
         }
         if let Some(keyspace) = config.use_keyspace {
             session.use_keyspace(keyspace).await?;
@@ -227,52 +210,6 @@ impl Session {
                 !matches!(status, NodeStatus::Up(conn_count) if conn_count.get() < conn_total)
             })
             .await;
-    }
-
-    async fn reopen_control_connection(&self) {
-        for delay in self
-            .0
-            .node_config_local
-            .reconnection_policy
-            .reconnection_delays()
-        {
-            let topology = self.topology();
-            let local = topology
-                .local_nodes()
-                .choose_multiple(&mut rand::thread_rng(), topology.local_nodes().len())
-                .filter(|node| node.is_up())
-                .map(|node| (node, &self.0.node_config_local));
-            let remote = topology
-                .remote_nodes()
-                .choose_multiple(&mut rand::thread_rng(), topology.remote_nodes().len())
-                .filter(|node| node.is_up())
-                .map(|node| (node, &self.0.node_config_remote));
-            for (node, node_config) in local.chain(remote) {
-                match ControlConnection::open(
-                    ControlAddr::Peer(node.peer().rpc_address),
-                    node_config,
-                    self.0.register_for_schema_event,
-                    self.0.database_event_internal.clone(),
-                    self.0.session_events_internal.clone(),
-                )
-                .await
-                {
-                    Ok(conn) => {
-                        self.0.control_connection.store(Arc::new(conn));
-                        self.0.control_notify.notify_waiters();
-                        return;
-                    }
-                    Err(error) => {
-                        let event = SessionEvent::ControlConnectionFailed {
-                            rpc_address: node.peer().rpc_address,
-                            error: Arc::new(error),
-                        };
-                        self.0.session_events_internal.send(event).ok();
-                    }
-                }
-            }
-            tokio::time::sleep(delay).await;
-        }
     }
 
     pub async fn execute<S, V>(
@@ -434,31 +371,18 @@ impl Session {
         self.0.topology.load_full()
     }
 
-    pub fn database_events(&self) -> broadcast::Receiver<Event> {
-        self.0.database_events.subscribe()
-    }
-
-    pub fn session_events(&self) -> broadcast::Receiver<SessionEvent> {
-        self.0.session_events.subscribe()
-    }
-
-    fn control(&self) -> Arc<ControlConnection> {
-        self.0.control_connection.load_full()
-    }
-
-    async fn with_control<T, F>(
-        &self,
-        f: impl Fn(Arc<ControlConnection>) -> F,
-    ) -> Result<T, Box<DatabaseError>>
+    async fn with_control<'a, T, F>(
+        &'a self,
+        f: impl Fn(&'a ControlConnection) -> F,
+    ) -> Result<T, ExecutionError>
     where
-        F: Future<Output = Result<T, ControlError>>,
+        F: Future<Output = Result<T, ExecutionError>> + 'a,
     {
         loop {
             let notified = self.0.control_notify.notified();
-            match f(self.control()).await {
-                Ok(res) => return Ok(res),
-                Err(ControlError::Database(err)) => return Err(err),
-                Err(ControlError::Closed | ControlError::Io(_)) => notified.await,
+            match f(&self.0.control_connection).await {
+                Err(ExecutionError::Io(_)) => notified.await,
+                res => return res,
             }
         }
     }
@@ -478,7 +402,7 @@ impl Session {
             return Ok(partitioner.clone());
         }
         Ok(self
-            .with_control(|ctrl| async move { ctrl.get_partitioner(keyspace, table).await })
+            .with_control(|ctrl| ctrl.get_partitioner(keyspace, table))
             .await?
             .as_deref()
             .and_then(|partitioner| partitioner.parse().ok())
@@ -496,7 +420,7 @@ impl Session {
             return Ok(self.get_or_compute_ring(strategy));
         }
         let strategy = self
-            .with_control(|ctrl| async move { ctrl.get_replication(keyspace).await })
+            .with_control(|ctrl| ctrl.get_replication(keyspace))
             .await?
             .map(ReplicationStrategy::parse)
             .transpose()
@@ -522,8 +446,8 @@ impl Session {
 
     pub fn send_heartbeat(&self, distance: Option<NodeDistance>) {
         const HEARTBEAT_QUERY: &str = "SELECT key FROM system.local where key = 'local'";
-        let control_conn = self.control();
-        tokio::spawn(async move { control_conn.send_heartbeat().await });
+        let inner = self.0.clone();
+        tokio::spawn(async move { inner.control_connection.send_heartbeat().await });
         let topology = self.topology();
         let nodes = match distance {
             Some(NodeDistance::Local) => topology.local_nodes(),
@@ -554,7 +478,7 @@ impl Session {
         if topology.latest_refresh() > instant {
             return Ok(topology);
         }
-        let peers = self.control().get_peers().await?;
+        let peers = self.0.control_connection.get_peers().await?;
         let node_stream: FuturesUnordered<_> = peers
             .into_iter()
             .map(|peer| self.topology_node(&topology, peer))
@@ -580,16 +504,17 @@ impl Session {
                     node.disconnect(NodeDisconnectionReason::Removed);
                 }
             }
-            let event = SessionEvent::TopologyUpdate {
-                topology: new_topology.clone(),
-            };
-            self.0.session_events_internal.send(event).ok();
+            self.0.session_event_handler.topology_update(&new_topology);
             return Ok(new_topology);
         }
         Ok(topology)
     }
 
     async fn topology_node(&self, topology: &Topology, peer: Peer) -> Option<(Arc<Node>, bool)> {
+        assert!(
+            !peer.rpc_address.is_unspecified(),
+            "Node version is bugged and outdated, consider upgrading it"
+        );
         let distance = self.0.node_localizer.distance(&peer);
         if let Some(node) = topology
             .nodes_by_rpc_address()
@@ -628,15 +553,15 @@ impl Session {
             distance,
             node_config,
             self.0.keyspace_used.clone(),
-            self.0.session_events_internal.clone(),
+            self.0.node_disconnections.clone(),
+            self.0.session_event_handler.clone(),
             self.0.schema_agreement_interval,
         );
         Some((node, true))
     }
 
     pub async fn check_schema_agreement(&self) -> Result<Option<Uuid>, ExecutionError> {
-        let schema_version = self.control().check_schema_agreement().await?;
-        Ok(schema_version)
+        self.0.control_connection.check_schema_agreement().await
     }
 
     pub async fn wait_schema_agreement(&self) -> Uuid {
