@@ -249,6 +249,8 @@ impl Connection {
         }
         loop {
             let notified = self.pending_executions.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             match self.execute(&request, tracing, custom_payload).await {
                 Err(ConnectionExecutionError::NoStreamAvailable) => notified.await,
                 res => return res,
