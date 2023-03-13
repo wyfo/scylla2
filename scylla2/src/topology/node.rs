@@ -26,7 +26,7 @@ use crate::{
         tcp::TcpConnection,
         Connection, OwnedConnection,
     },
-    error::{ConnectionExecutionError, Disconnected, ExecutionError},
+    error::{Disconnected, ExecutionError, RequestError},
     event::SessionEventHandler,
     execution::peers_and_local,
     statement::query::cql_query,
@@ -338,16 +338,15 @@ impl Node {
         );
         let peers_query = cql_query("SELECT schema_version FROM system.peers", ());
         let (local, peers) = match tokio::try_join!(
-            conn.execute(local_query, false, None),
-            conn.execute(peers_query, false, None),
+            conn.send(local_query, false, None),
+            conn.send(peers_query, false, None),
         ) {
             Ok(res) => res,
-            Err(
-                ConnectionExecutionError::ConnectionClosed
-                | ConnectionExecutionError::NoStreamAvailable,
-            ) => return Ok(None),
-            Err(ConnectionExecutionError::InvalidRequest(invalid)) => return Err(invalid.into()),
-            Err(ConnectionExecutionError::Io(err)) => return Err(err.into()),
+            Err(RequestError::ConnectionClosed | RequestError::NoStreamAvailable) => {
+                return Ok(None)
+            }
+            Err(RequestError::InvalidRequest(invalid)) => return Err(invalid.into()),
+            Err(RequestError::Io(err)) => return Err(err.into()),
         };
         let schema_versions: HashSet<Uuid> =
             peers_and_local(peers.ok()?, local.ok()?, |(uuid,)| uuid)?;

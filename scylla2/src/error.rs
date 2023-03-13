@@ -43,7 +43,7 @@ pub enum UseKeyspaceError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectionExecutionError {
+pub enum RequestError {
     #[error(transparent)]
     InvalidRequest(#[from] InvalidRequest),
     #[error("No stream is available, request has not been sent")]
@@ -93,13 +93,12 @@ impl From<Elapsed> for ExecutionError {
     }
 }
 
-impl From<ConnectionExecutionError> for ExecutionError {
-    fn from(value: ConnectionExecutionError) -> Self {
+impl From<RequestError> for ExecutionError {
+    fn from(value: RequestError) -> Self {
         match value {
-            ConnectionExecutionError::ConnectionClosed
-            | ConnectionExecutionError::NoStreamAvailable => Self::NoConnection,
-            ConnectionExecutionError::Io(io) => io.into(),
-            ConnectionExecutionError::InvalidRequest(invalid) => invalid.into(),
+            RequestError::ConnectionClosed | RequestError::NoStreamAvailable => Self::NoConnection,
+            RequestError::Io(io) => io.into(),
+            RequestError::InvalidRequest(invalid) => invalid.into(),
         }
     }
 }

@@ -15,7 +15,7 @@ use futures::task::{noop_waker, AtomicWaker};
 use once_cell::sync::OnceCell;
 use scylla2_cql::frame::envelope::Envelope;
 
-use crate::{connection::CONNECTION_STREAM_UPPER_BOUND, error::ConnectionExecutionError};
+use crate::{connection::CONNECTION_STREAM_UPPER_BOUND, error::RequestError};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid stream received")]
@@ -26,7 +26,7 @@ pub(super) enum StreamState {
     #[default]
     Null,
     Waiting(Waker),
-    Ready(Result<Envelope, ConnectionExecutionError>),
+    Ready(Result<Envelope, RequestError>),
     Aborted,
 }
 
@@ -57,7 +57,7 @@ impl StreamNode {
 
     fn set_response(
         &self,
-        response: Result<Envelope, ConnectionExecutionError>,
+        response: Result<Envelope, RequestError>,
     ) -> Result<bool, InvalidStream> {
         let mut state = self.0.lock().unwrap();
         let is_err = response.is_err();
@@ -76,7 +76,7 @@ impl StreamNode {
         Ok(false)
     }
 
-    fn poll(&self, cx: &mut Context) -> Poll<Result<Envelope, ConnectionExecutionError>> {
+    fn poll(&self, cx: &mut Context) -> Poll<Result<Envelope, RequestError>> {
         let mut state = self.0.lock().unwrap();
         debug_assert!(!matches!(state.deref(), StreamState::Aborted));
         if let StreamState::Ready(res) = mem::take(state.deref_mut()) {
@@ -98,7 +98,7 @@ impl Stream<'_> {
         self.value
     }
 
-    pub(super) async fn wait_response(self) -> Result<Envelope, ConnectionExecutionError> {
+    pub(super) async fn wait_response(self) -> Result<Envelope, RequestError> {
         let result = future::poll_fn(|cx| self.node.poll(cx)).await;
         self.pool.release(self.value);
         mem::forget(self);
@@ -243,7 +243,7 @@ impl StreamPool {
     pub(super) fn set_response(
         &self,
         stream: i16,
-        response: Result<Envelope, ConnectionExecutionError>,
+        response: Result<Envelope, RequestError>,
     ) -> Result<(), InvalidStream> {
         let (map, index) = self.get_map_index(stream);
         if map.streams[index].set_response(response)? {

@@ -3,6 +3,7 @@ use std::{
     convert::identity,
     fmt, io, mem,
     ops::Deref,
+    pin::pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -34,7 +35,7 @@ use tokio::{
 
 use crate::{
     connection::{stream::StreamPool, tcp::TcpConnection},
-    error::ConnectionExecutionError,
+    error::RequestError,
     topology::node::Node,
     utils::other_error,
 };
@@ -153,25 +154,25 @@ impl Connection {
         &self.extensions
     }
 
-    pub async fn execute(
+    pub async fn send(
         &self,
         request: impl Request,
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
-    ) -> Result<Response, ConnectionExecutionError> {
+    ) -> Result<Response, RequestError> {
         let _guard = ExecutionGuard::new(self)?;
+        let stream = self
+            .stream_pool
+            .allocate()
+            .ok_or(RequestError::NoStreamAvailable)?;
         request.check(self.version, Some(&self.extensions))?;
         let size = request
             .serialized_envelope_size(self.version, Some(&self.extensions), custom_payload)
             .map_err(InvalidRequest::from)?;
-        let stream = self
-            .stream_pool
-            .allocate()
-            .ok_or(ConnectionExecutionError::NoStreamAvailable)?;
         let check_size = |size| {
             if self.version == ProtocolVersion::V4 && size > ENVELOPE_MAX_LENGTH {
                 // TODO why Err type is needed here
-                return Err::<_, ConnectionExecutionError>(
+                return Err::<_, RequestError>(
                     InvalidRequest::FrameTooBig(FrameTooBig(size)).into(),
                 );
             }
@@ -194,9 +195,7 @@ impl Connection {
             check_size(bytes.len())?;
             match self.vectored_queue.enqueue(bytes).await {
                 Ok(_) => {}
-                Err(EnqueueError::Closed(_)) => {
-                    return Err(ConnectionExecutionError::ConnectionClosed)
-                }
+                Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                 Err(EnqueueError::InsufficientCapacity(_)) => unreachable!(),
             }
         } else {
@@ -213,17 +212,13 @@ impl Connection {
             };
             match self.slice_queue.enqueue((size, write)).await {
                 Ok(_) => {}
-                Err(EnqueueError::Closed(_)) => {
-                    return Err(ConnectionExecutionError::ConnectionClosed)
-                }
+                Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                 Err(EnqueueError::InsufficientCapacity(_)) => {
                     let mut vec = vec![0; size];
                     write(&mut vec);
                     match self.vectored_queue.enqueue(vec).await {
                         Ok(_) => {}
-                        Err(EnqueueError::Closed(_)) => {
-                            return Err(ConnectionExecutionError::ConnectionClosed)
-                        }
+                        Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                         Err(EnqueueError::InsufficientCapacity(_)) => unreachable!(),
                     }
                 }
@@ -237,22 +232,21 @@ impl Connection {
         )?)
     }
 
-    pub async fn execute_queued(
+    pub async fn send_queued(
         &self,
         request: impl Request,
         tracing: bool,
         custom_payload: Option<&HashMap<String, Vec<u8>>>,
-    ) -> Result<Response, ConnectionExecutionError> {
-        match self.execute(&request, tracing, custom_payload).await {
-            Err(ConnectionExecutionError::NoStreamAvailable) => {}
+    ) -> Result<Response, RequestError> {
+        match self.send(&request, tracing, custom_payload).await {
+            Err(RequestError::NoStreamAvailable) => {}
             res => return res,
         }
         loop {
-            let notified = self.pending_executions.notified();
-            tokio::pin!(notified);
+            let mut notified = pin!(self.pending_executions.notified());
             notified.as_mut().enable();
-            match self.execute(&request, tracing, custom_payload).await {
-                Err(ConnectionExecutionError::NoStreamAvailable) => notified.await,
+            match self.send(&request, tracing, custom_payload).await {
+                Err(RequestError::NoStreamAvailable) => notified.await,
                 res => return res,
             }
         }
@@ -336,10 +330,7 @@ impl Connection {
             let (header, remain) = envelopes.split_at(ENVELOPE_HEADER_SIZE);
             let header = EnvelopeHeader::deserialize(header.try_into().unwrap()).unwrap();
             self.stream_pool
-                .set_response(
-                    header.stream,
-                    Err(ConnectionExecutionError::ConnectionClosed),
-                )
+                .set_response(header.stream, Err(RequestError::ConnectionClosed))
                 .ok();
             envelopes = &remain[header.length as usize..];
         }
@@ -349,12 +340,12 @@ impl Connection {
 struct ExecutionGuard<'a>(&'a Connection);
 
 impl<'a> ExecutionGuard<'a> {
-    fn new(conn: &'a Connection) -> Result<Self, ConnectionExecutionError> {
+    fn new(conn: &'a Connection) -> Result<Self, RequestError> {
         if conn.ongoing_requests.fetch_add(1, Ordering::Relaxed)
             >= CONNECTION_STREAM_UPPER_BOUND - 1
         {
             conn.ongoing_requests.fetch_sub(1, Ordering::Relaxed);
-            return Err(ConnectionExecutionError::NoStreamAvailable);
+            return Err(RequestError::NoStreamAvailable);
         }
         Ok(Self(conn))
     }

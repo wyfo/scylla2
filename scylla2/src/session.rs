@@ -21,8 +21,8 @@ use uuid::Uuid;
 use crate::{
     connection::config::ConnectionConfig,
     error::{
-        ConnectionExecutionError, ExecutionError, InvalidKeyspace, OngoingUseKeyspace,
-        SessionError, UseKeyspaceError,
+        ExecutionError, InvalidKeyspace, OngoingUseKeyspace, RequestError, SessionError,
+        UseKeyspaceError,
     },
     event::{DatabaseEventHandler, SessionEventHandler},
     execution::ExecutionResult,
@@ -272,7 +272,7 @@ impl Session {
                         tracing::trace!("No connection available, use a different");
                     }
                     match conn
-                        .execute_queued(&request, config.tracing.unwrap_or(false), None)
+                        .send_queued(&request, config.tracing.unwrap_or(false), None)
                         .await
                     {
                         Ok(response) => {
@@ -304,14 +304,9 @@ impl Session {
                                 statement.result_specs(),
                             )?);
                         }
-                        Err(
-                            ConnectionExecutionError::ConnectionClosed
-                            | ConnectionExecutionError::NoStreamAvailable,
-                        ) => {}
-                        Err(ConnectionExecutionError::InvalidRequest(invalid)) => {
-                            return Err(invalid.into())
-                        }
-                        Err(ConnectionExecutionError::Io(err)) => {
+                        Err(RequestError::ConnectionClosed | RequestError::NoStreamAvailable) => {}
+                        Err(RequestError::InvalidRequest(invalid)) => return Err(invalid.into()),
+                        Err(RequestError::Io(err)) => {
                             return Err(err.into());
                         }
                     }
@@ -335,7 +330,7 @@ impl Session {
             .nodes()
             .iter()
             .filter_map(|node| node.get_random_connection())
-            .map(|conn| conn.execute(&prepare, false, None))
+            .map(|conn| conn.send(&prepare, false, None))
             .collect();
         while let Some(res) = executions.next().await {
             match res {
@@ -360,7 +355,7 @@ impl Session {
                     });
                 }
                 Ok(response) => return Err(invalid_response(response.ok()?.body).into()),
-                Err(ConnectionExecutionError::InvalidRequest(err)) => return Err(err.into()),
+                Err(RequestError::InvalidRequest(err)) => return Err(err.into()),
                 Err(_) => {}
             }
         }
@@ -463,10 +458,7 @@ impl Session {
                     .iter()
                     .map(|conn| conn.as_owned(node.clone()))
             })
-            .map(|conn| async move {
-                conn.execute(cql_query(HEARTBEAT_QUERY, ()), false, None)
-                    .await
-            })
+            .map(|conn| async move { conn.send(cql_query(HEARTBEAT_QUERY, ()), false, None).await })
             .map(tokio::spawn)
             .for_each(drop);
     }
@@ -608,7 +600,7 @@ impl Session {
             .iter()
             .flat_map(|node| node.connections())
             .flatten()
-            .map(|conn| conn.execute_queued(cql_query(&query, ()), false, None))
+            .map(|conn| conn.send_queued(cql_query(&query, ()), false, None))
             .collect();
         while let Some(res) = executions.next().await {
             if let Ok(response) = res {
