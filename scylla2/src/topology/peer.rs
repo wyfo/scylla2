@@ -44,7 +44,7 @@ pub enum ShardAwarePort {
 pub trait AddressTranslator: fmt::Debug + Send + Sync {
     async fn translate(
         &self,
-        address: IpAddr,
+        peer: &Peer,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError>;
 }
 
@@ -55,9 +55,9 @@ pub struct ConnectionPort(pub u16);
 impl AddressTranslator for ConnectionPort {
     async fn translate(
         &self,
-        address: IpAddr,
+        peer: &Peer,
     ) -> Result<(SocketAddr, Option<ShardAwarePort>), BoxedError> {
-        Ok(((address, self.0).into(), None))
+        Ok(((peer.rpc_address, self.0).into(), None))
     }
 }
 
@@ -65,16 +65,16 @@ impl AddressTranslator for ConnectionPort {
 pub(crate) trait AddressTranslatorExt: AddressTranslator {
     async fn translate_or_warn(
         &self,
-        address: IpAddr,
+        peer: &Peer,
         event_handler: &impl SessionEventHandler,
     ) -> io::Result<(SocketAddr, Option<ShardAwarePort>)> {
-        match self.translate(address).await {
+        match self.translate(peer).await {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 #[cfg(feature = "tracing")]
-                tracing::warn!(%address, error, "Address translation failed");
+                tracing::warn!(rpc_address = %peer.rpc_address, error, "Address translation failed");
                 let error_str = format!("Address translation failed: {error}");
-                event_handler.address_translation_failed(address, error);
+                event_handler.address_translation_failed(peer, error);
                 Err(other_error(error_str))
             }
         }

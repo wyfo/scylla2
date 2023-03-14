@@ -424,7 +424,7 @@ impl Node {
     }
 
     async fn update_address(self: &Arc<Node>, address_translator: &dyn AddressTranslator) {
-        let Some(address) = address_translator.translate_or_warn(self.peer.rpc_address, &self.session_event_handler).await.ok() else {
+        let Some(address) = address_translator.translate_or_warn(&self.peer, &self.session_event_handler).await.ok() else {
             return
         };
         let prev_addr = self.address.lock().unwrap().replace(address);

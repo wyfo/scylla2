@@ -14,6 +14,7 @@ use crate::{
     error::BoxedError,
     topology::{
         node::{Node, NodeStatus},
+        peer::Peer,
         Topology,
     },
 };
@@ -29,7 +30,7 @@ impl DatabaseEventHandler for Option<Arc<dyn DatabaseEventHandler>> {}
 
 #[allow(unused_variables)]
 pub trait SessionEventHandler: fmt::Debug + Send + Sync {
-    fn address_translation_failed(&self, rpc_address: IpAddr, error: BoxedError) {}
+    fn address_translation_failed(&self, peer: &Peer, error: BoxedError) {}
     fn connection_opened(&self, node: &Arc<Node>, shard: u16, index: usize) {}
     fn connection_failed(&self, node: &Arc<Node>, error: ConnectionError) {}
     fn connection_closed(
