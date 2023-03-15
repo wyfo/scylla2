@@ -207,7 +207,8 @@ impl Session {
         self.topology()
             .wait_nodes(|node, status| {
                 let conn_total = node.connections().map_or(0, <[_]>::len);
-                !matches!(status, NodeStatus::Up(conn_count) if conn_count.get() < conn_total)
+                !matches!(status, NodeStatus::Connecting)
+                    && matches!(status, NodeStatus::Up(conn_count) if conn_count.get() < conn_total)
             })
             .await;
     }
