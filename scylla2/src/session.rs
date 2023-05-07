@@ -205,10 +205,12 @@ impl Session {
 
     pub async fn wait_for_all_connections(&self) {
         self.topology()
-            .wait_nodes(|node, status| {
-                let conn_total = node.connections().map_or(0, <[_]>::len);
-                !matches!(status, NodeStatus::Connecting)
-                    && matches!(status, NodeStatus::Up(conn_count) if conn_count.get() < conn_total)
+            .wait_nodes(|node, status| match status {
+                NodeStatus::Connecting => false,
+                NodeStatus::Up(conn_count) => {
+                    conn_count.get() == node.connections().map_or(0, <[_]>::len)
+                }
+                NodeStatus::Down | NodeStatus::Disconnected(_) => true,
             })
             .await;
     }
