@@ -55,7 +55,7 @@ impl ControlConnection {
         Self {
             connection: Default::default(),
             stream_generator: Default::default(),
-            streams: Default::default(),
+            streams: Arc::new(Mutex::new(Some(StreamMap::default()))),
             session_event_handler,
         }
     }
@@ -150,9 +150,9 @@ impl ControlConnection {
         let (stream, rx) = loop {
             let stream = (self.stream_generator.fetch_add(1, Ordering::Relaxed) % (1 << 15)) as i16;
             let mut guard = self.streams.lock().unwrap();
-            let Some(streams) = guard.as_mut() else {
-                return Err(other_error("Connection closed").into());
-            };
+            let streams = guard
+                .as_mut()
+                .ok_or_else(|| other_error("Control connection closed"))?;
             if let Entry::Vacant(e) = streams.entry(stream) {
                 let (tx, rx) = oneshot::channel();
                 e.insert(tx);
@@ -167,7 +167,9 @@ impl ControlConnection {
         write_envelope(version, false, &bytes, &mut connection.writer).await?;
         // drop connection to release the mutex
         drop(connection);
-        let envelope = rx.await.map_err(|_| other_error("Connection closed"))??;
+        let envelope = rx
+            .await
+            .map_err(|_| other_error("Control connection closed"))??;
         let response = Response::deserialize(version, Default::default(), envelope, None)?;
         Ok(response.ok()?)
     }
@@ -260,27 +262,24 @@ async fn read_task(
     events: mpsc::UnboundedSender<Event>,
     closed_event: impl Fn(io::Error),
 ) {
-    let callback = |envelope: Envelope| -> Result<(), Option<io::Error>> {
+    let callback = |envelope: Envelope| -> io::Result<()> {
         if envelope.stream == -1 {
             let event = Event::deserialize(version, Default::default(), &envelope.body)?;
             events.send(event).ok();
         } else {
             let mut guard = streams.lock().unwrap();
-            let Some(streams) = guard.as_mut() else {
-                return Err(None)
-            };
+            let streams = guard
+                .as_mut()
+                .ok_or_else(|| other_error("Control connection closed"))?;
             if let Some(tx) = streams.remove(&envelope.stream) {
                 tx.send(Ok(envelope)).ok();
             } else {
-                return Err(Some(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Unexpected stream",
-                )));
+                return Err(other_error("Unexpected control stream"));
             }
         };
         Ok(())
     };
-    if let Err(ReadLoopError::Io(err) | ReadLoopError::Callback(Some(err))) =
+    if let Err(ReadLoopError::Io(err) | ReadLoopError::Callback(err)) =
         read_envelope_loop(version, None, reader, callback).await
     {
         streams.lock().unwrap().take();
