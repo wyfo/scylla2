@@ -18,6 +18,8 @@ pub mod response;
 mod utils;
 pub mod value;
 
+#[cfg(feature = "cql-value")]
+pub use crate::value::CqlValue;
 pub use crate::{
     request::query::values::{NamedQueryValues, QueryValues},
     response::result::rows::FromRow,
