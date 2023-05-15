@@ -16,11 +16,11 @@ use crate::{
 };
 
 pub mod convert;
-#[cfg(feature = "cql_value")]
+#[cfg(feature = "cql-value")]
 mod cql_value;
 pub mod iterator;
 
-#[cfg(feature = "cql_value")]
+#[cfg(feature = "cql-value")]
 pub use cql_value::CqlValue;
 
 fn check_size(size: usize) -> Result<usize, ValueTooBig> {
