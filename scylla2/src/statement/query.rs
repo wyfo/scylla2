@@ -1,77 +1,65 @@
-use std::marker::PhantomData;
-
 use scylla2_cql::{
-    request::query::{
-        parameters::{OnlyValues, QueryParameters as CqlQueryParameters},
-        values::QueryValues,
-        Query as CqlQuery,
-    },
-    response::result::rows::PagingState,
+    request::query::{values::QueryValues, Query as CqlQuery},
     Consistency, SerialConsistency,
 };
 
-use crate::statement::{
-    config::{StatementConfig, StatementOptions},
-    Statement,
-};
+use crate::statement::{options::StatementOptions, Statement};
 
-#[derive(Debug)]
-pub struct QueryParameters<'a, V> {
-    pub(super) config: &'a StatementConfig,
-    pub(super) options: &'a StatementOptions,
-    pub(super) skip_metadata: bool,
-    pub(super) values: V,
+impl<V> Statement<V> for str
+where
+    V: QueryValues,
+{
+    type Request<'a> = CqlQuery<'a, V>;
+
+    fn as_request<'a>(
+        &'a self,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
+        options: &'a StatementOptions,
+        values: V,
+    ) -> Self::Request<'a> {
+        CqlQuery {
+            query: self,
+            parameters: options.to_query_parameters(
+                consistency,
+                serial_consistency,
+                Statement::<V>::result_specs(self).is_some(),
+                values,
+            ),
+        }
+    }
 }
 
-impl<V> CqlQueryParameters<V> for QueryParameters<'_, V> {
-    fn consistency(&self) -> Consistency {
-        self.config.consistency.unwrap_or_default()
-    }
+impl<V> Statement<V> for String
+where
+    V: QueryValues,
+{
+    type Request<'a> = CqlQuery<'a, V>;
 
-    fn keyspace(&self) -> Option<&str> {
-        self.config.keyspace.as_deref()
-    }
-
-    fn now_in_seconds(&self) -> Option<i32> {
-        self.options.now_in_seconds
-    }
-
-    fn page_size(&self) -> Option<i32> {
-        self.config.page_size
-    }
-
-    fn paging_state(&self) -> Option<&PagingState> {
-        self.options.paging_state.as_ref()
-    }
-
-    fn serial_consistency(&self) -> Option<SerialConsistency> {
-        self.config.serial_consistency
-    }
-
-    fn skip_metadata(&self) -> bool {
-        self.skip_metadata
-    }
-
-    fn timestamp(&self) -> Option<i64> {
-        self.options.timestamp
-    }
-
-    fn values(&self) -> &V {
-        &self.values
+    fn as_request<'a>(
+        &'a self,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
+        options: &'a StatementOptions,
+        values: V,
+    ) -> Self::Request<'a> {
+        str::as_request(self, consistency, serial_consistency, options, values)
     }
 }
 
 #[derive(Debug)]
 pub struct Query<S = String> {
     statement: S,
-    config: StatementConfig,
+    idempotent: bool,
+    is_lwt: Option<bool>,
 }
 
 impl<S> Query<S> {
-    pub fn new(statement: S) -> Self {
+    pub fn new(statement: S, idempotent: bool, lwt: bool) -> Self {
         Self {
             statement,
-            config: Default::default(),
+            idempotent,
+            is_lwt: Some(lwt),
         }
     }
 }
@@ -90,85 +78,25 @@ where
     S: AsRef<str>,
     V: QueryValues,
 {
-    type Request<'a> = CqlQuery<'a, QueryParameters<'a, V>, V> where Self: 'a;
+    type Request<'a> = CqlQuery<'a, V> where Self: 'a;
 
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a> {
-        CqlQuery {
-            query: self.statement.as_ref(),
-            parameters: QueryParameters {
-                config,
-                options,
-                skip_metadata: false,
-                values,
-            },
-            _phantom: PhantomData,
-        }
+        self.statement
+            .as_ref()
+            .as_request(consistency, serial_consistency, options, values)
     }
 
-    fn config(&self) -> Option<&StatementConfig> {
-        Some(&self.config)
+    fn idempotent(&self) -> bool {
+        self.idempotent
     }
-}
 
-impl<V> Statement<V> for str
-where
-    V: QueryValues,
-{
-    type Request<'a> = CqlQuery<'a, QueryParameters<'a, V>, V>;
-
-    fn as_request<'a>(
-        &'a self,
-        config: &'a StatementConfig,
-        options: &'a StatementOptions,
-        values: V,
-    ) -> Self::Request<'a> {
-        CqlQuery {
-            query: self,
-            parameters: QueryParameters {
-                config,
-                options,
-                skip_metadata: false,
-                values,
-            },
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<V> Statement<V> for String
-where
-    V: QueryValues,
-{
-    type Request<'a> = CqlQuery<'a, QueryParameters<'a, V>, V>;
-
-    fn as_request<'a>(
-        &'a self,
-        config: &'a StatementConfig,
-        options: &'a StatementOptions,
-        values: V,
-    ) -> Self::Request<'a> {
-        CqlQuery {
-            query: self,
-            parameters: QueryParameters {
-                config,
-                options,
-                skip_metadata: false,
-                values,
-            },
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub(crate) fn cql_query<V>(query: &str, values: V) -> CqlQuery<OnlyValues<V>, V> {
-    CqlQuery {
-        query,
-        parameters: OnlyValues(values),
-        _phantom: PhantomData,
+    fn is_lwt(&self) -> Option<bool> {
+        self.is_lwt
     }
 }

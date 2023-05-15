@@ -1,34 +1,24 @@
-use std::marker::PhantomData;
-
 use crate::{
     cql::{ShortBytes, WriteCql},
     error::{InvalidRequest, ValueTooBig},
     extensions::ProtocolExtensions,
     frame::envelope::OpCode,
     request::{
-        query::{
-            parameters::{QueryParameters, QueryParametersExt},
-            values::QueryValues,
-        },
+        query::{parameters::QueryParameters, values::QueryValues},
         Request,
     },
     ProtocolVersion,
 };
 
 #[derive(Debug)]
-pub struct Execute<'a, P, V>
-where
-    P: QueryParameters<V>,
-{
+pub struct Execute<'a, V> {
     pub id: &'a [u8],
     pub result_metadata_id: Option<&'a [u8]>,
-    pub parameters: P,
-    pub _phantom: PhantomData<V>,
+    pub parameters: QueryParameters<'a, V>,
 }
 
-impl<P, V> Request for Execute<'_, P, V>
+impl<V> Request for Execute<'_, V>
 where
-    P: QueryParameters<V>,
     V: QueryValues,
 {
     fn opcode(&self) -> OpCode {

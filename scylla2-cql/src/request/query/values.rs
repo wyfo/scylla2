@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
 use crate::{
     cql::WriteCql,
@@ -127,3 +127,42 @@ macro_rules! query_values_tuple {
     };
 }
 tuples!(query_values_tuple);
+
+pub trait QueryValuesExt: QueryValues {
+    fn serialize(&self) -> Result<SerializedQueryValues, ValueTooBig> {
+        let mut bytes = vec![0; self.values_size()?];
+        self.write_values(&mut &mut bytes[..]);
+        Ok(SerializedQueryValues {
+            count: self.count(),
+            named: self.named(),
+            bytes: bytes.into(),
+        })
+    }
+}
+
+impl<T> QueryValuesExt for T where T: QueryValues {}
+
+#[derive(Debug, Clone)]
+pub struct SerializedQueryValues {
+    count: u16,
+    named: bool,
+    bytes: Arc<[u8]>,
+}
+
+impl QueryValues for SerializedQueryValues {
+    fn count(&self) -> u16 {
+        self.count
+    }
+
+    fn named(&self) -> bool {
+        self.named
+    }
+
+    fn values_size(&self) -> Result<usize, ValueTooBig> {
+        Ok(self.bytes.len())
+    }
+
+    fn write_values(&self, buf: &mut &mut [u8]) {
+        buf.copy_from_slice(&self.bytes);
+    }
+}

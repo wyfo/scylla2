@@ -2,9 +2,6 @@
 #![deny(clippy::dbg_macro)]
 #![deny(clippy::map_unwrap_or)]
 #![deny(clippy::semicolon_if_nothing_returned)]
-#![cfg_attr(not(feature = "write-all-vectored"), forbid(unsafe_code))]
-
-extern crate core;
 
 use std::fmt;
 
@@ -20,6 +17,15 @@ pub mod request;
 pub mod response;
 mod utils;
 pub mod value;
+
+pub use crate::{
+    request::query::values::{NamedQueryValues, QueryValues},
+    response::result::rows::FromRow,
+    value::{
+        convert::{AsValue, FromValue},
+        iterator::{AsValueIter, FromValueIter},
+    },
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, strum::EnumIter)]
 #[non_exhaustive]

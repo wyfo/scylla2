@@ -6,17 +6,16 @@ use scylla2_cql::{
         query::values::QueryValues,
     },
     response::result::column_spec::ColumnSpec,
+    Consistency, SerialConsistency,
 };
 
 use crate::{
     error::PartitionKeyError,
-    statement::{
-        config::{StatementConfig, StatementOptions},
-        prepared::PreparedStatement,
-        query::Query,
-        Statement,
+    statement::{options::StatementOptions, prepared::PreparedStatement, query::Query, Statement},
+    topology::{
+        partitioner::{SerializePartitionKey, Token},
+        ring::Partition,
     },
-    topology::{partitioner::SerializePartitionKey, ring::Partition},
     utils::tuples,
 };
 
@@ -24,16 +23,11 @@ use crate::{
 pub struct Batch<S> {
     r#type: BatchType,
     statements: S,
-    config: StatementConfig,
 }
 
 impl<S> Batch<S> {
     pub fn new(r#type: BatchType, statements: S) -> Self {
-        Self {
-            r#type,
-            statements,
-            config: Default::default(),
-        }
+        Self { r#type, statements }
     }
 
     pub fn logged(statements: S) -> Self {
@@ -57,7 +51,7 @@ impl<S> Batch<S> {
     }
 }
 
-pub type BatchN<const N: usize> = Batch<[PreparedStatement; N]>;
+pub type BatchN<const N: usize, S = PreparedStatement> = Batch<[S; N]>;
 
 impl<'b, S, V> Statement<&'b [V]> for Batch<&[S]>
 where
@@ -68,31 +62,29 @@ where
 
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: &'b [V],
     ) -> Self::Request<'a> {
-        CqlBatch {
-            r#type: self.r#type,
-            statements: self.statements,
+        options.to_batch(
+            consistency,
+            serial_consistency,
+            self.r#type,
+            self.statements,
             values,
-            consistency: config.consistency.unwrap_or_default(),
-            keyspace: config.keyspace.as_deref(),
-            now_in_seconds: options.now_in_seconds,
-            serial_consistency: config.serial_consistency,
-            timestamp: options.timestamp,
-        }
+        )
     }
 
-    fn config(&self) -> Option<&StatementConfig> {
-        Some(&self.config)
-    }
-
-    fn partition(&self, values: &&'b [V]) -> Result<Option<Partition>, PartitionKeyError> {
+    fn partition(
+        &self,
+        values: &&'b [V],
+        token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
         self.statements
             .get(0)
             .and_then(|s| Some((s, values.get(0)?)))
-            .and_then(|(s, v)| s.partition(v).transpose())
+            .and_then(|(s, v)| s.partition(v, token).transpose())
             .transpose()
     }
 
@@ -100,8 +92,12 @@ where
         self.statements.get(0).and_then(|s| s.result_specs())
     }
 
-    fn is_lwt(&self) -> bool {
-        self.statements.get(0).map_or(false, |s| s.is_lwt())
+    fn idempotent(&self) -> bool {
+        self.statements.iter().all(S::idempotent)
+    }
+
+    fn is_lwt(&self) -> Option<bool> {
+        self.statements.get(0)?.is_lwt()
     }
 }
 
@@ -114,31 +110,29 @@ where
 
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: &'b [V],
     ) -> Self::Request<'a> {
-        CqlBatch {
-            r#type: self.r#type,
-            statements: &self.statements,
+        options.to_batch(
+            consistency,
+            serial_consistency,
+            self.r#type,
+            &self.statements,
             values,
-            consistency: config.consistency.unwrap_or_default(),
-            keyspace: config.keyspace.as_deref(),
-            now_in_seconds: options.now_in_seconds,
-            serial_consistency: config.serial_consistency,
-            timestamp: options.timestamp,
-        }
+        )
     }
 
-    fn config(&self) -> Option<&StatementConfig> {
-        Some(&self.config)
-    }
-
-    fn partition(&self, values: &&'b [V]) -> Result<Option<Partition>, PartitionKeyError> {
+    fn partition(
+        &self,
+        values: &&'b [V],
+        token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
         self.statements
             .get(0)
             .and_then(|s| Some((s, values.get(0)?)))
-            .and_then(|(s, v)| s.partition(v).transpose())
+            .and_then(|(s, v)| s.partition(v, token).transpose())
             .transpose()
     }
 
@@ -146,8 +140,12 @@ where
         self.statements.get(0).and_then(|s| s.result_specs())
     }
 
-    fn is_lwt(&self) -> bool {
-        self.statements.get(0).map_or(false, |s| s.is_lwt())
+    fn idempotent(&self) -> bool {
+        self.statements.iter().all(S::idempotent)
+    }
+
+    fn is_lwt(&self) -> Option<bool> {
+        self.statements.get(0)?.is_lwt()
     }
 }
 
@@ -184,35 +182,33 @@ macro_rules! batch {
 
             fn as_request<'a>(
                 &'a self,
-                config: &'a StatementConfig,
+                consistency: Consistency,
+                serial_consistency: Option<SerialConsistency>,
                 options: &'a StatementOptions,
                 values: (V0, $($values),*),
             ) -> Self::Request<'a> {
-                CqlBatch {
-                    r#type: Default::default(),
-                    statements: (&self.0, $(&self.$idx),*),
+                options.to_batch(
+                    consistency,
+                    serial_consistency,
+                    Default::default(),
+                    (&self.0, $(&self.$idx),*),
                     values,
-                    consistency: config.consistency.unwrap_or_default(),
-                    keyspace: config.keyspace.as_deref(),
-                    now_in_seconds: options.now_in_seconds,
-                    serial_consistency: config.serial_consistency,
-                    timestamp: options.timestamp,
-                }
+                )
             }
 
-            fn config(&self) -> Option<&StatementConfig> {
-                None
-            }
-
-            fn partition(&self, values: &(V0, $($values),*)) -> Result<Option<Partition>, PartitionKeyError> {
-                self.0.partition(&values.0)
+            fn partition(&self, values: &(V0, $($values),*), token: Option<Token>) -> Result<Option<Partition>, PartitionKeyError> {
+                self.0.partition(&values.0, token)
             }
 
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
                 self.0.result_specs()
             }
 
-            fn is_lwt(&self) -> bool {
+            fn idempotent(&self) -> bool {
+                self.0.idempotent() $(|| self.$idx.idempotent())*
+            }
+
+            fn is_lwt(&self) -> Option<bool> {
                 self.0.is_lwt()
             }
         }
@@ -230,78 +226,75 @@ macro_rules! batch {
 
             fn as_request<'a>(
                 &'a self,
-                config: &'a StatementConfig,
+                consistency: Consistency,
+                serial_consistency: Option<SerialConsistency>,
                 options: &'a StatementOptions,
                 values: (V0, $($values, )*),
             ) -> Self::Request<'a> {
-                CqlBatch {
-                    r#type: self.r#type,
-                    statements: (&self.statements.0, $(&self.statements.$idx),*),
+                options.to_batch(
+                    consistency,
+                    serial_consistency,
+                    self.r#type,
+                    (&self.statements.0, $(&self.statements.$idx),*),
                     values,
-                    consistency: config.consistency.unwrap_or_default(),
-                    keyspace: config.keyspace.as_deref(),
-                    now_in_seconds: options.now_in_seconds,
-                    serial_consistency: config.serial_consistency,
-                    timestamp: options.timestamp,
-                }
+                )
             }
 
-            fn config(&self) -> Option<&StatementConfig> {
-                Some(&self.config)
-            }
-
-            fn partition(&self, values: &(V0, $($values, )*)) -> Result<Option<Partition>, PartitionKeyError> {
-                self.statements.0.partition(&values.0)
+            fn partition(&self, values: &(V0, $($values, )*), token: Option<Token>) -> Result<Option<Partition>, PartitionKeyError> {
+                self.statements.0.partition(&values.0, token)
             }
 
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
                 self.statements.0.result_specs()
             }
 
-            fn is_lwt(&self) -> bool {
+            fn idempotent(&self) -> bool {
+                self.statements.0.idempotent() $(|| self.statements.$idx.idempotent())*
+            }
+
+            fn is_lwt(&self) -> Option<bool> {
                 self.statements.0.is_lwt()
             }
         }
 
 
-        impl<'b, V0, $($values),*> Statement<(V0, $($values),*)> for BatchN<$len>
+        impl<'b, S, V0, $($values),*> Statement<(V0, $($values),*)> for BatchN<$len, S>
         where
+            S: BatchStatement + Statement<V0> $(+ Statement<$values>)*,
             V0: QueryValues + SerializePartitionKey,
             $($values: QueryValues),*
         {
-            type Request<'a> = CqlBatch<'a, &'a [PreparedStatement; $len], (V0, $($values),*)> where Self: 'a;
+            type Request<'a> = CqlBatch<'a, &'a [S; $len], (V0, $($values),*)> where Self: 'a;
 
             fn as_request<'a>(
                 &'a self,
-                config: &'a StatementConfig,
+                consistency: Consistency,
+                serial_consistency: Option<SerialConsistency>,
                 options: &'a StatementOptions,
                 values: (V0, $($values, )*),
             ) -> Self::Request<'a> {
-                CqlBatch {
-                    r#type: self.r#type,
-                    statements: &self.statements,
+                options.to_batch(
+                    consistency,
+                    serial_consistency,
+                    self.r#type,
+                    &self.statements,
                     values,
-                    consistency: config.consistency.unwrap_or_default(),
-                    keyspace: config.keyspace.as_deref(),
-                    now_in_seconds: options.now_in_seconds,
-                    serial_consistency: config.serial_consistency,
-                    timestamp: options.timestamp,
-                }
+                )
             }
 
-            fn config(&self) -> Option<&StatementConfig> {
-                Some(&self.config)
-            }
-
-            fn partition(&self, values: &(V0, $($values, )*)) -> Result<Option<Partition>, PartitionKeyError> {
-                <_ as Statement<V0>>::partition(&self.statements[0], (&values.0))
+            fn partition(&self, values: &(V0, $($values, )*), token: Option<Token>) -> Result<Option<Partition>, PartitionKeyError> {
+                <_ as Statement<V0>>::partition(&self.statements[0], (&values.0), token)
             }
 
             fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
                  <_ as Statement<V0>>::result_specs(&self.statements[0])
             }
 
-            fn is_lwt(&self) -> bool {
+            fn idempotent(&self) -> bool {
+                Statement::<V0>::idempotent(&self.statements[0]) $(|| Statement::<$values>::idempotent(&self.statements[$idx]))*
+            }
+
+            fn is_lwt(&self) -> Option<bool> {
                 <_ as Statement<V0>>::is_lwt(&self.statements[0])
             }
         }

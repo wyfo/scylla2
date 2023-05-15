@@ -24,12 +24,11 @@ use crate::{
     connection::{
         config::{InitSocket, ReconnectionPolicy},
         tcp::TcpConnection,
-        Connection, OwnedConnection,
+        Connection,
     },
     error::{Disconnected, ExecutionError, RequestError},
     event::SessionEventHandler,
-    execution::peers_and_local,
-    statement::query::cql_query,
+    execution::utils::{cql_query, peers_and_local},
     topology::{
         node::worker::NodeWorker,
         partitioner::Token,
@@ -296,16 +295,13 @@ impl Node {
     }
 
     pub fn get_random_connection(&self) -> Option<&Connection> {
-        loop {
+        while self.is_up() {
             let conn = self.connections()?.choose(&mut rand::thread_rng()).unwrap();
             if !conn.is_closed() {
                 return Some(conn);
             }
         }
-    }
-
-    pub fn get_random_owned_connection(self: &Arc<Self>) -> Option<OwnedConnection> {
-        Some(self.get_random_connection()?.as_owned(self.clone()))
+        None
     }
 
     pub fn get_sharded_connections(&self, token: Option<Token>) -> Option<&[Connection]> {
@@ -317,6 +313,18 @@ impl Node {
         let conn_per_shard = pool.connections.len() / sharder.nr_shards().get() as usize;
         let offset = shard as usize * conn_per_shard;
         Some(&pool.connections[offset..offset + conn_per_shard])
+    }
+
+    pub fn get_connection(&self, token: Option<Token>) -> Option<&Connection> {
+        let connections = self.get_sharded_connections(token)?;
+        if connections.len() == 1 {
+            connections.first().filter(|conn| !conn.is_closed())
+        } else {
+            connections
+                .choose_multiple(&mut rand::thread_rng(), connections.len())
+                .find(|conn| !conn.is_closed())
+        }
+        .or_else(|| self.get_random_connection())
     }
 
     pub fn try_reconnect(&self) -> Result<(), Disconnected> {

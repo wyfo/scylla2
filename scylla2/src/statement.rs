@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
-use config::{StatementConfig, StatementOptions};
-use scylla2_cql::{request::Request, response::result::column_spec::ColumnSpec};
+use options::StatementOptions;
+use scylla2_cql::{
+    request::Request, response::result::column_spec::ColumnSpec, Consistency, SerialConsistency,
+};
 
-use crate::{error::PartitionKeyError, topology::ring::Partition};
+use crate::{
+    error::PartitionKeyError,
+    topology::{partitioner::Token, ring::Partition},
+};
 
 pub mod batch;
-pub mod config;
+pub mod options;
 pub mod prepared;
 pub mod query;
-pub mod values;
 
 pub trait Statement<V> {
     type Request<'a>: Request
@@ -17,21 +21,26 @@ pub trait Statement<V> {
         Self: 'a;
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a>;
-    fn config(&self) -> Option<&StatementConfig> {
-        None
-    }
-    fn partition(&self, _values: &V) -> Result<Option<Partition>, PartitionKeyError> {
+    fn partition(
+        &self,
+        _values: &V,
+        _token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
         Ok(None)
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         None
     }
-    fn is_lwt(&self) -> bool {
+    fn idempotent(&self) -> bool {
         false
+    }
+    fn is_lwt(&self) -> Option<bool> {
+        None
     }
 }
 
@@ -42,22 +51,27 @@ where
     type Request<'a> = T::Request<'a> where Self: 'a;
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a> {
-        T::as_request(self, config, options, values)
+        T::as_request(self, consistency, serial_consistency, options, values)
     }
-    fn config(&self) -> Option<&StatementConfig> {
-        T::config(self)
-    }
-    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
-        T::partition(self, values)
+    fn partition(
+        &self,
+        _values: &V,
+        _token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
+        T::partition(self, _values, None)
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
     }
-    fn is_lwt(&self) -> bool {
+    fn idempotent(&self) -> bool {
+        T::idempotent(self)
+    }
+    fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
     }
 }
@@ -69,22 +83,27 @@ where
     type Request<'a> = T::Request<'a> where Self: 'a;
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a> {
-        T::as_request(self, config, options, values)
+        T::as_request(self, consistency, serial_consistency, options, values)
     }
-    fn config(&self) -> Option<&StatementConfig> {
-        T::config(self)
-    }
-    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
-        T::partition(self, values)
+    fn partition(
+        &self,
+        _values: &V,
+        _token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
+        T::partition(self, _values, None)
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
     }
-    fn is_lwt(&self) -> bool {
+    fn idempotent(&self) -> bool {
+        T::idempotent(self)
+    }
+    fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
     }
 }
@@ -96,22 +115,27 @@ where
     type Request<'a> = T::Request<'a> where Self: 'a;
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a> {
-        T::as_request(self, config, options, values)
+        T::as_request(self, consistency, serial_consistency, options, values)
     }
-    fn config(&self) -> Option<&StatementConfig> {
-        T::config(self)
-    }
-    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
-        T::partition(self, values)
+    fn partition(
+        &self,
+        _values: &V,
+        _token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
+        T::partition(self, _values, None)
     }
     fn result_specs(&self) -> Option<Arc<[ColumnSpec]>> {
         T::result_specs(self)
     }
-    fn is_lwt(&self) -> bool {
+    fn idempotent(&self) -> bool {
+        T::idempotent(self)
+    }
+    fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
     }
 }

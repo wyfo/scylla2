@@ -28,7 +28,7 @@ pub struct Prepared {
     pub pk_indexes: Arc<[u16]>,
     pub column_specs: Arc<[ColumnSpec]>,
     pub result_specs: Option<Arc<[ColumnSpec]>>,
-    pub is_lwt: bool,
+    pub is_lwt: Option<bool>,
 }
 
 impl Prepared {
@@ -63,7 +63,7 @@ impl Prepared {
             .map(Into::into);
         let is_lwt = extensions
             .and_then(|ext| ext.scylla_lwt_add_metadata_mark)
-            .map_or(false, |flag| flags.bits() | flag == flag);
+            .map(|flag| flags.bits() | flag == flag);
         Ok(Self {
             id,
             result_metadata_id,

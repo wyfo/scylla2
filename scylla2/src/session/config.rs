@@ -6,8 +6,7 @@ use std::{
 };
 
 use scylla2_cql::{
-    frame::compression::Compression, protocol::auth::AuthenticationProtocol, Consistency,
-    ProtocolVersion, SerialConsistency,
+    frame::compression::Compression, protocol::auth::AuthenticationProtocol, ProtocolVersion,
 };
 
 use crate::{
@@ -15,8 +14,8 @@ use crate::{
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
     error::SessionError,
     event::{DatabaseEventHandler, SessionEventHandler},
+    execution::profile::ExecutionProfile,
     session::Session,
-    statement::config::StatementConfig,
     topology::{
         node::PoolSize,
         peer::{AddressTranslator, AllRemote, ConnectionPort, LocalDatacenter, NodeLocalizer},
@@ -33,6 +32,7 @@ pub struct SessionConfig {
     pub connection_local: ConnectionConfig,
     pub connection_remote: ConnectionConfig,
     pub database_event_handler: Option<Arc<dyn DatabaseEventHandler>>,
+    pub execution_profile: Arc<ExecutionProfile>,
     pub minimal_protocol_version: Option<ProtocolVersion>,
     pub node_localizer: Arc<dyn NodeLocalizer>,
     pub nodes: Vec<NodeAddress>,
@@ -45,7 +45,6 @@ pub struct SessionConfig {
     #[cfg(feature = "ssl")]
     pub ssl_context: Option<openssl::ssl::SslContext>,
     pub startup_options: HashMap<String, String>,
-    pub statement_config: Option<StatementConfig>,
     pub use_keyspace: Option<Arc<str>>,
 }
 
@@ -69,6 +68,7 @@ impl Default for SessionConfig {
             connection_local: ConnectionConfig::default(),
             connection_remote: ConnectionConfig::default(),
             database_event_handler: None,
+            execution_profile: Default::default(),
             minimal_protocol_version: None,
             node_localizer: Arc::new(AllRemote),
             nodes: Vec::default(),
@@ -81,7 +81,6 @@ impl Default for SessionConfig {
             #[cfg(feature = "ssl")]
             ssl_context: None,
             startup_options,
-            statement_config: None,
             use_keyspace: None,
         }
     }
@@ -206,6 +205,14 @@ impl SessionConfig {
         self.add_startup_options("DRIVER_VERSION", version)
     }
 
+    pub fn execution_profile(
+        mut self,
+        execution_profile: impl Into<Arc<ExecutionProfile>>,
+    ) -> Self {
+        self.execution_profile = execution_profile.into();
+        self
+    }
+
     pub fn minimal_protocol_version(mut self, protocol_version: ProtocolVersion) -> Self {
         self.minimal_protocol_version = Some(protocol_version);
         self
@@ -271,46 +278,6 @@ impl SessionConfig {
         value: impl Into<String>,
     ) -> Self {
         self.startup_options.insert(option.into(), value.into());
-        self
-    }
-
-    pub fn statement_config(mut self, params: StatementConfig) -> Self {
-        self.statement_config = Some(params);
-        self
-    }
-
-    pub fn statement_consistency(mut self, consistency: Consistency) -> Self {
-        if let Some(ref mut cfg) = self.statement_config {
-            cfg.consistency = Some(consistency);
-        }
-        self
-    }
-
-    pub fn statement_keyspace(mut self, keyspace: impl Into<Arc<str>>) -> Self {
-        if let Some(ref mut cfg) = self.statement_config {
-            cfg.keyspace = Some(keyspace.into());
-        }
-        self
-    }
-
-    pub fn statement_page_size(mut self, page_size: i32) -> Self {
-        if let Some(ref mut cfg) = self.statement_config {
-            cfg.page_size = Some(page_size);
-        }
-        self
-    }
-
-    pub fn statement_serial_consistency(mut self, serial_consistency: SerialConsistency) -> Self {
-        if let Some(ref mut cfg) = self.statement_config {
-            cfg.serial_consistency = Some(serial_consistency);
-        }
-        self
-    }
-
-    pub fn statement_tracing(mut self, tracing: bool) -> Self {
-        if let Some(ref mut cfg) = self.statement_config {
-            cfg.tracing = Some(tracing);
-        }
         self
     }
 

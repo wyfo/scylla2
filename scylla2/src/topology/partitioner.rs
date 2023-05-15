@@ -3,8 +3,9 @@ use std::{num::Wrapping, str::FromStr};
 use bytes::BufMut;
 use scylla2_cql::{
     error::ValueTooBig,
-    request::query::values::NamedQueryValues,
-    value::{convert::AsValue, WriteValue},
+    request::query::values::{NamedQueryValues, SerializedQueryValues},
+    value::WriteValue,
+    AsValue,
 };
 
 use crate::{
@@ -326,3 +327,13 @@ macro_rules! tuple_values {
 }
 
 tuples!(tuple_values);
+
+impl SerializePartitionKey for SerializedQueryValues {
+    fn partition_key_size(&self, _pk_indexes: &[u16]) -> Result<usize, PartitionKeyError> {
+        Err(PartitionKeyError::NoValues)
+    }
+
+    fn serialize_partition_key(&self, _pk_indexes: &[u16], _slice: &mut [u8]) {
+        panic!("Unsupported")
+    }
+}

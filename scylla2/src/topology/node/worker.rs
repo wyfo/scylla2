@@ -12,7 +12,7 @@ use crate::{
     connection::{tcp::TcpConnection, Connection, ConnectionRef},
     error::Disconnected,
     event::SessionEventHandler,
-    statement::query::cql_query,
+    execution::utils::cql_query,
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason, NodeEvent},
         sharding::Sharder,

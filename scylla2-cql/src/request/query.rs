@@ -1,15 +1,10 @@
-use std::marker::PhantomData;
-
 use crate::{
     cql::{LongString, WriteCql},
     error::ValueTooBig,
     extensions::ProtocolExtensions,
     frame::envelope::OpCode,
     request::{
-        query::{
-            parameters::{QueryParameters, QueryParametersExt},
-            values::QueryValues,
-        },
+        query::{parameters::QueryParameters, values::QueryValues},
         Request,
     },
     ProtocolVersion,
@@ -19,18 +14,13 @@ pub mod parameters;
 pub mod values;
 
 #[derive(Debug)]
-pub struct Query<'a, P, V>
-where
-    P: QueryParameters<V>,
-{
+pub struct Query<'a, V> {
     pub query: &'a str,
-    pub parameters: P,
-    pub _phantom: PhantomData<V>,
+    pub parameters: QueryParameters<'a, V>,
 }
 
-impl<P, V> Request for Query<'_, P, V>
+impl<V> Request for Query<'_, V>
 where
-    P: QueryParameters<V>,
     V: QueryValues,
 {
     fn opcode(&self) -> OpCode {

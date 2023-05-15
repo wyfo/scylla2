@@ -9,6 +9,8 @@ use tokio::time::error::Elapsed;
 pub use scylla2_cql::error::ConnectionError;
 use scylla2_cql::error::DatabaseErrorKind;
 
+use crate::execution::retry::RetryableError;
+
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
@@ -55,14 +57,6 @@ pub enum RequestError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ExecutionResultError {
-    #[error("IO error: {0}")]
-    Io(#[from] io::Error),
-    #[error("Database error: {0}")]
-    Database(#[from] Box<DatabaseError>),
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error(transparent)]
     PartitionKey(#[from] PartitionKeyError),
@@ -85,6 +79,14 @@ impl ExecutionError {
             other => Err(other),
         }
     }
+
+    pub fn retryable(&self) -> Option<RetryableError<'_>> {
+        match self {
+            Self::Io(err) => Some(RetryableError::Io(err)),
+            Self::Database(err) => Some(RetryableError::Database(err)),
+            _ => None,
+        }
+    }
 }
 
 impl From<Elapsed> for ExecutionError {
@@ -103,22 +105,13 @@ impl From<RequestError> for ExecutionError {
     }
 }
 
-impl From<ExecutionResultError> for ExecutionError {
-    fn from(value: ExecutionResultError) -> Self {
-        match value {
-            ExecutionResultError::Io(io) => io.into(),
-            ExecutionResultError::Database(err) => err.into(),
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 #[error("Ongoing USE KEYSPACE query")]
 pub struct OngoingUseKeyspace;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PartitionKeyError {
-    #[error("No values to match partition key indexes. If you provided named query values, use positional instead (you may need to map your name on their position, using prepared statement metadata).")]
+    #[error("No values to match partition key indexes. If you provided named query values, use positional instead (you may need to map your name on their position, using prepared statement metadata). Pre-serialized query values are also not supported")]
     NoValues,
     #[error("No partition key indexes")]
     NoPartitionKeyIndexes,

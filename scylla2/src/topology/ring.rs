@@ -208,6 +208,11 @@ impl Partition {
     pub fn remote_replicas(&self) -> &[Arc<Node>] {
         &self.get_replicas().remote
     }
+
+    pub fn local_then_remote_replicas(&self) -> impl Iterator<Item = &Arc<Node>> {
+        let replicas = self.get_replicas();
+        replicas.local.iter().chain(&replicas.remote)
+    }
 }
 
 #[derive(Debug)]

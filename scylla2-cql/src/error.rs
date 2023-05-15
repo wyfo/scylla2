@@ -50,6 +50,8 @@ pub enum InvalidRequest {
         statements_count: usize,
         values_count: usize,
     },
+    #[error("Cannot set consistency")]
+    NoConsistency,
 }
 
 #[derive(Debug, thiserror::Error)]

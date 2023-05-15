@@ -25,7 +25,7 @@ once_cell = "1"
 openssl = { version = "0.10", optional = true }
 rand = "0.8"
 scylla2-cql = { path = "../scylla2-cql",  default-features = false, features = ["protocol"] }
-socket2 = "0.4"
+socket2 = "0.5"
 sharded-slab = "0.1.4"
 strum = "0.24"
 swap-buffer-queue = { git = "https://github.com/wyfo/swap-buffer-queue", features = ["async", "write", "write-vectored"] }

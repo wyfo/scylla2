@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use scylla2_cql::{error::BoxedError, response::result::rows::FromRow};
+use scylla2_cql::{error::BoxedError, FromRow};
 
 use crate::{
     debug::Closure, event::SessionEventHandler, topology::partitioner::Token, utils::other_error,
@@ -37,8 +37,6 @@ pub enum ShardAwarePort {
     NoPort,
     Port(u16),
 }
-
-// Is there an interest for AddressTranslator to take &Peer instead of IpAddr?
 
 #[async_trait::async_trait]
 pub trait AddressTranslator: fmt::Debug + Send + Sync {

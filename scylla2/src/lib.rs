@@ -21,7 +21,7 @@ pub use crate::{
     session::{config::SessionConfig, Session},
     statement::{
         batch::{Batch, BatchN},
-        config::StatementConfig,
+        options::StatementOptions,
         prepared::PreparedStatement,
         query::Query,
     },

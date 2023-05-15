@@ -29,8 +29,7 @@ use crate::{
     connection::tcp::TcpConnection,
     error::ExecutionError,
     event::SessionEventHandler,
-    execution::{maybe_cql_row, peers_and_local},
-    statement::query::cql_query,
+    execution::utils::{cql_query, maybe_cql_row, peers_and_local},
     topology::{node::NodeConfig, peer::Peer},
     utils::other_error,
 };

@@ -3,16 +3,19 @@ use std::{
     fmt,
     fmt::Formatter,
     future::Future,
-    iter,
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
 use arc_swap::ArcSwap;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{stream, stream::FuturesUnordered, Stream, StreamExt};
+use rand::seq::SliceRandom;
 use scylla2_cql::{
-    error::ConnectionError,
-    request::prepare::Prepare,
+    error::{ConnectionError, InvalidRequest},
+    request::{
+        prepare::Prepare,
+        query::values::{QueryValues, QueryValuesExt, SerializedQueryValues},
+    },
     response::{result::CqlResult, Response, ResponseBody},
 };
 use tokio::sync::{mpsc, Notify};
@@ -25,19 +28,16 @@ use crate::{
         UseKeyspaceError,
     },
     event::{DatabaseEventHandler, SessionEventHandler},
-    execution::ExecutionResult,
+    execution::{
+        load_balancing::LoadBalancingPolicy, make_request, profile::ExecutionProfile,
+        utils::cql_query, ExecutionResult,
+    },
     session::{
         config::{NodeAddress, SessionConfig},
         control::ControlConnection,
         worker::{event_worker, loop_worker, node_worker},
     },
-    statement::{
-        config::{StatementConfig, StatementOptions},
-        prepared::PreparedStatement,
-        query::cql_query,
-        values::IntoValues,
-        Statement,
-    },
+    statement::{options::StatementOptions, prepared::PreparedStatement, Statement},
     topology::{
         node::{Node, NodeConfig, NodeDisconnectionReason, NodeStatus},
         partitioner::Partitioner,
@@ -45,7 +45,7 @@ use crate::{
         ring::{Partition, ReplicationStrategy, Ring},
         Topology,
     },
-    utils::{invalid_response, other_error, resolve_hostname, RandomSliceIter},
+    utils::{invalid_response, other_error, resolve_hostname},
 };
 
 pub mod config;
@@ -57,6 +57,7 @@ pub(crate) struct SessionInner {
     control_connection: ControlConnection,
     control_notify: Notify,
     database_event_handler: Option<Arc<dyn DatabaseEventHandler>>,
+    execution_profile: Arc<ExecutionProfile>,
     keyspace_used: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
     node_config_local: Arc<NodeConfig>,
     node_config_remote: Arc<NodeConfig>,
@@ -68,7 +69,6 @@ pub(crate) struct SessionInner {
     schema_agreement_interval: Duration,
     session_event_handler: Option<Arc<dyn SessionEventHandler>>,
     strategy_cache: tokio::sync::RwLock<HashMap<String, ReplicationStrategy>>,
-    statement_config: Option<StatementConfig>,
     topology: ArcSwap<Topology>,
     topology_lock: tokio::sync::Mutex<()>,
 }
@@ -84,7 +84,7 @@ impl fmt::Debug for Session {
         f.debug_struct("Session")
             .field("topology", &self.topology())
             .field("keyspace_used", &keyspace_used)
-            .field("statement_config", &self.statement_config())
+            .field("execution_profile", &self.execution_profile())
             .finish()
     }
 }
@@ -152,6 +152,7 @@ impl Session {
             control_connection,
             control_notify: Notify::new(),
             database_event_handler: config.database_event_handler,
+            execution_profile: config.execution_profile,
             keyspace_used: Arc::new(tokio::sync::RwLock::new(None)),
             node_config_local,
             node_config_remote,
@@ -163,7 +164,6 @@ impl Session {
             schema_agreement_interval: Default::default(),
             session_event_handler: config.session_event_handler,
             strategy_cache: Default::default(),
-            statement_config: config.statement_config,
             topology: Default::default(),
             topology_lock: Default::default(),
         });
@@ -221,8 +221,7 @@ impl Session {
         values: V,
     ) -> Result<ExecutionResult, ExecutionError>
     where
-        V: IntoValues,
-        S: Statement<V::Values>,
+        S: Statement<V>,
     {
         self.execute_with(statement, values, StatementOptions::default())
             .await
@@ -235,93 +234,150 @@ impl Session {
         options: impl Into<StatementOptions>,
     ) -> Result<ExecutionResult, ExecutionError>
     where
-        V: IntoValues,
-        S: Statement<V::Values>,
+        S: Statement<V>,
     {
         let options = options.into();
-        let values = values.into_values();
-        let partition = statement.partition(&values)?;
-        let default_config;
-        let config = match (statement.config(), self.statement_config()) {
-            (Some(cfg), Some(default)) => {
-                default_config = cfg.merge(default);
-                &default_config
+        let partition = statement.partition(&values, options.token)?;
+        let profile = options
+            .execution_profile
+            .as_ref()
+            .unwrap_or(&self.0.execution_profile);
+        let serial_consistency = profile
+            .serial_consistency
+            .filter(|_| statement.is_lwt().unwrap_or(true));
+        let request =
+            statement.as_request(profile.consistency, serial_consistency, &options, values);
+        let (response, info) = match (
+            &profile.load_balancing_policy,
+            &partition,
+            statement.is_lwt(),
+        ) {
+            (LoadBalancingPolicy::TokenAware, Some(partition), Some(true)) => {
+                make_request(
+                    &request,
+                    options.custom_payload.as_ref(),
+                    statement.idempotent(),
+                    profile.clone(),
+                    partition.replicas().iter(),
+                    Some(partition.token()),
+                )
+                .await?
             }
-            (Some(cfg), None) => cfg,
-            (None, Some(default)) => default,
-            (None, None) => {
-                default_config = Default::default();
-                &default_config
+            (LoadBalancingPolicy::TokenAware, Some(partition), _) => {
+                make_request(
+                    &request,
+                    options.custom_payload.as_ref(),
+                    statement.idempotent(),
+                    profile.clone(),
+                    partition.local_then_remote_replicas(),
+                    Some(partition.token()),
+                )
+                .await?
+            }
+            (LoadBalancingPolicy::TokenAware, None, _) => {
+                let topology = self.topology();
+                let nodes = topology.nodes();
+                make_request(
+                    &request,
+                    options.custom_payload.as_ref(),
+                    statement.idempotent(),
+                    profile.clone(),
+                    nodes.choose_multiple(&mut rand::thread_rng(), nodes.len()),
+                    None,
+                )
+                .await?
+            }
+            (LoadBalancingPolicy::Dynamic(policy), partition, is_lwt) => {
+                make_request(
+                    &request,
+                    options.custom_payload.as_ref(),
+                    statement.idempotent(),
+                    profile.clone(),
+                    policy.query_plan(self, partition.as_ref(), is_lwt.unwrap_or(false)),
+                    partition.as_ref().map(Partition::token),
+                )
+                .await?
             }
         };
-        let request = statement.as_request(config, &options, values);
-        let topology;
-        let (local_nodes, remote_nodes) = match partition {
-            Some(ref p) => (p.local_replicas(), p.remote_replicas()),
-            None => {
-                topology = self.topology();
-                (topology.local_nodes(), topology.remote_nodes())
+        match (&response.body, self.0.auto_await_schema_agreement_timeout) {
+            (ResponseBody::Result(CqlResult::SchemaChange(event)), Some(timeout)) => {
+                tokio::time::timeout(timeout, info.node().wait_schema_agreement())
+                    .await
+                    .map_err(|_| ExecutionError::SchemaAgreementTimeout(event.clone()))?;
             }
-        };
-        let token = partition.as_ref().map(Partition::token);
-        for node in local_nodes.iter().chain(remote_nodes) {
-            if let Some(conns) = node.get_sharded_connections(token) {
-                let conn_iter = RandomSliceIter::new(conns)
-                    .chain(iter::repeat_with(|| node.get_random_connection()).flatten());
-                #[allow(unused_variables)]
-                for (i, conn) in conn_iter.enumerate() {
-                    #[cfg(feature = "tracing")]
-                    if i > conns.len() {
-                        tracing::trace!("No connection available, use a different");
-                    }
-                    match conn
-                        .send_queued(&request, config.tracing.unwrap_or(false), None)
-                        .await
-                    {
-                        Ok(response) => {
-                            match (&response.body, self.0.auto_await_schema_agreement_timeout) {
-                                (
-                                    ResponseBody::Result(CqlResult::SchemaChange(event)),
-                                    Some(timeout),
-                                ) => {
-                                    tokio::time::timeout(timeout, node.wait_schema_agreement())
-                                        .await
-                                        .map_err(|_| {
-                                            ExecutionError::SchemaAgreementTimeout(event.clone())
-                                        })?;
-                                }
-                                (ResponseBody::Result(CqlResult::Rows(rows)), _)
-                                    if rows.metadata.new_metadata_id.is_some() =>
-                                {
-                                    // TODO maybe a add a config flag to decide if an error has to be
-                                    // raised here
-                                    // TODO some statements (e.g. ArcSwap<Arc<PreparedStatement>>)
-                                    // should provide a way to update their metadata in Statement trait
-                                    #[cfg(feature = "tracing")]
-                                    tracing::warn!("Outdated result metadata");
-                                }
-                                _ => {}
-                            }
-                            return Ok(ExecutionResult::from_response(
-                                response,
-                                statement.result_specs(),
-                            )?);
-                        }
-                        Err(RequestError::ConnectionClosed | RequestError::NoStreamAvailable) => {}
-                        Err(RequestError::InvalidRequest(invalid)) => return Err(invalid.into()),
-                        Err(RequestError::Io(err)) => {
-                            return Err(err.into());
-                        }
-                    }
-                }
-            };
+            (ResponseBody::Result(CqlResult::Rows(rows)), _)
+                if rows.metadata.new_metadata_id.is_some() =>
+            {
+                // TODO maybe a add a config flag to decide if an error has to be
+                // raised here
+                // TODO some statements (e.g. ArcSwap<Arc<PreparedStatement>>)
+                // should provide a way to update their metadata in Statement trait
+                #[cfg(feature = "tracing")]
+                tracing::warn!("Outdated result metadata");
+            }
+            _ => {}
         }
-        Err(ExecutionError::NoConnection)
+        ExecutionResult::new(response, statement.result_specs(), info)
+    }
+
+    pub fn execute_paged<S, V>(
+        &self,
+        statement: S,
+        values: V,
+        page_size: i32,
+    ) -> impl Stream<Item = Result<ExecutionResult, ExecutionError>>
+    where
+        S: Statement<V> + for<'a> Statement<&'a SerializedQueryValues>,
+        V: QueryValues,
+    {
+        self.execute_paged_with(statement, values, page_size, StatementOptions::default())
+    }
+
+    pub fn execute_paged_with<S, V>(
+        &self,
+        statement: S,
+        values: V,
+        page_size: i32,
+        options: impl Into<StatementOptions>,
+    ) -> impl Stream<Item = Result<ExecutionResult, ExecutionError>>
+    where
+        S: Statement<V> + for<'a> Statement<&'a SerializedQueryValues>,
+        V: QueryValues,
+    {
+        let mut options = options.into();
+        options.page_size = Some(page_size);
+        stream::try_unfold(
+            (self.clone(), statement, values, options, None),
+            |(session, statement, values, mut options, serialized_values)| async {
+                if options.page_size.is_none() {
+                    return Ok(None);
+                }
+                if options.token.is_none() {
+                    let partition = statement.partition(&values, options.token)?;
+                    options.token = partition.map(|part| part.token());
+                }
+                let serialized_values = serialized_values
+                    .map_or_else(|| values.serialize(), Ok)
+                    .map_err(InvalidRequest::from)?;
+                let result = session
+                    .execute_with(&statement, &serialized_values, options.clone())
+                    .await?;
+                if result.paging_state().is_some() {
+                    options.paging_state = result.paging_state().cloned();
+                } else {
+                    options.page_size = None;
+                }
+                let next = (session, statement, values, options, Some(serialized_values));
+                Ok(Some((result, next)))
+            },
+        )
     }
 
     pub async fn prepare<S, K>(
         &self,
         statement: impl Into<Prepare<S, K>>,
+        idempotent: bool,
+        is_lwt: impl Into<Option<bool>>,
     ) -> Result<PreparedStatement, ExecutionError>
     where
         S: AsRef<str>,
@@ -350,11 +406,13 @@ impl Session {
                     } else {
                         None
                     };
+                    let is_lwt = prepared.is_lwt.or_else(|| is_lwt.into());
                     return Ok(PreparedStatement {
                         statement: prepare.statement.as_ref().into(),
                         prepared,
                         partitioning,
-                        config: Default::default(),
+                        idempotent,
+                        is_lwt,
                     });
                 }
                 Ok(response) => return Err(invalid_response(response.ok()?.body).into()),
@@ -568,8 +626,8 @@ impl Session {
         }
     }
 
-    pub fn statement_config(&self) -> Option<&StatementConfig> {
-        self.0.statement_config.as_ref()
+    pub fn execution_profile(&self) -> Arc<ExecutionProfile> {
+        self.0.execution_profile.clone()
     }
 
     pub fn keyspace_used(&self) -> Result<Option<Arc<str>>, OngoingUseKeyspace> {

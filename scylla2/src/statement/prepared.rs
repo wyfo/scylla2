@@ -1,29 +1,27 @@
-use std::{marker::PhantomData, ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
 use scylla2_cql::{
     request::{execute::Execute, query::values::QueryValues},
     response::result::{column_spec::ColumnSpec, prepared::Prepared},
+    Consistency, SerialConsistency,
 };
 
 use crate::{
     error::PartitionKeyError,
-    statement::{
-        config::{StatementConfig, StatementOptions},
-        query::QueryParameters,
-        Statement,
-    },
+    statement::{options::StatementOptions, Statement},
     topology::{
-        partitioner::{Partitioner, SerializePartitionKey},
+        partitioner::{Partitioner, SerializePartitionKey, Token},
         ring::{Partition, Ring},
     },
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PreparedStatement {
     pub(crate) statement: String,
     pub(crate) prepared: Prepared,
     pub(crate) partitioning: Option<(Partitioner, Ring)>,
-    pub(crate) config: StatementConfig,
+    pub(crate) idempotent: bool,
+    pub(crate) is_lwt: Option<bool>,
 }
 
 impl Deref for PreparedStatement {
@@ -51,34 +49,37 @@ impl<V> Statement<V> for PreparedStatement
 where
     V: QueryValues + SerializePartitionKey,
 {
-    type Request<'a> = Execute<'a, QueryParameters<'a, V>, V>;
+    type Request<'a> = Execute<'a, V>;
 
     fn as_request<'a>(
         &'a self,
-        config: &'a StatementConfig,
+        consistency: Consistency,
+        serial_consistency: Option<SerialConsistency>,
         options: &'a StatementOptions,
         values: V,
     ) -> Self::Request<'a> {
         Execute {
             id: &self.id,
             result_metadata_id: self.result_metadata_id.as_deref(),
-            parameters: QueryParameters {
-                config,
-                options,
-                skip_metadata: self.result_specs.is_some(),
+            parameters: options.to_query_parameters(
+                consistency,
+                serial_consistency,
+                self.result_specs.is_some(),
                 values,
-            },
-            _phantom: PhantomData,
+            ),
         }
     }
 
-    fn config(&self) -> Option<&StatementConfig> {
-        Some(&self.config)
-    }
-
-    fn partition(&self, values: &V) -> Result<Option<Partition>, PartitionKeyError> {
+    fn partition(
+        &self,
+        values: &V,
+        token: Option<Token>,
+    ) -> Result<Option<Partition>, PartitionKeyError> {
         if let Some((partitioner, ring)) = self.partitioning.as_ref() {
-            let token = partitioner.token(values, &self.pk_indexes)?;
+            let token = match token {
+                Some(tk) => tk,
+                None => partitioner.token(values, &self.pk_indexes)?,
+            };
             return Ok(Some(ring.get_partition(token)));
         }
         Ok(None)
@@ -88,7 +89,11 @@ where
         self.result_specs.clone()
     }
 
-    fn is_lwt(&self) -> bool {
+    fn idempotent(&self) -> bool {
+        self.idempotent
+    }
+
+    fn is_lwt(&self) -> Option<bool> {
         self.is_lwt
     }
 }

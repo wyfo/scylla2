@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use enumflags2::bitflags;
 
 use crate::{
@@ -117,6 +119,30 @@ pub trait BatchStatement {
 }
 
 impl<T> BatchStatement for &T
+where
+    T: ?Sized + BatchStatement,
+{
+    fn prepared(&self) -> bool {
+        T::prepared(self)
+    }
+    fn bytes(&self) -> &[u8] {
+        T::bytes(self)
+    }
+}
+
+impl<T> BatchStatement for Box<T>
+where
+    T: ?Sized + BatchStatement,
+{
+    fn prepared(&self) -> bool {
+        T::prepared(self)
+    }
+    fn bytes(&self) -> &[u8] {
+        T::bytes(self)
+    }
+}
+
+impl<T> BatchStatement for Arc<T>
 where
     T: ?Sized + BatchStatement,
 {
