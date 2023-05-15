@@ -247,9 +247,10 @@ impl Session {
             .filter(|_| statement.is_lwt().unwrap_or(true));
         let request =
             statement.as_request(profile.consistency, serial_consistency, &options, values);
-        let (response, info) = match (
+        let token = partition.as_ref().map(Partition::token);
+        let (response, node, achieved_consistency) = match (
             &profile.load_balancing_policy,
-            &partition,
+            partition,
             statement.is_lwt(),
         ) {
             (LoadBalancingPolicy::TokenAware, Some(partition), Some(true)) => {
@@ -257,7 +258,7 @@ impl Session {
                     &request,
                     options.custom_payload.as_ref(),
                     statement.idempotent(),
-                    profile.clone(),
+                    profile,
                     partition.replicas().iter(),
                     Some(partition.token()),
                 )
@@ -268,7 +269,7 @@ impl Session {
                     &request,
                     options.custom_payload.as_ref(),
                     statement.idempotent(),
-                    profile.clone(),
+                    profile,
                     partition.local_then_remote_replicas(),
                     Some(partition.token()),
                 )
@@ -281,7 +282,7 @@ impl Session {
                     &request,
                     options.custom_payload.as_ref(),
                     statement.idempotent(),
-                    profile.clone(),
+                    profile,
                     nodes.choose_multiple(&mut rand::thread_rng(), nodes.len()),
                     None,
                 )
@@ -292,7 +293,7 @@ impl Session {
                     &request,
                     options.custom_payload.as_ref(),
                     statement.idempotent(),
-                    profile.clone(),
+                    profile,
                     policy.query_plan(self, partition.as_ref(), is_lwt.unwrap_or(false)),
                     partition.as_ref().map(Partition::token),
                 )
@@ -301,7 +302,7 @@ impl Session {
         };
         match (&response.body, self.0.auto_await_schema_agreement_timeout) {
             (ResponseBody::Result(CqlResult::SchemaChange(event)), Some(timeout)) => {
-                tokio::time::timeout(timeout, info.node().wait_schema_agreement())
+                tokio::time::timeout(timeout, node.wait_schema_agreement())
                     .await
                     .map_err(|_| ExecutionError::SchemaAgreementTimeout(event.clone()))?;
             }
@@ -317,7 +318,13 @@ impl Session {
             }
             _ => {}
         }
-        ExecutionResult::new(response, statement.result_specs(), info)
+        ExecutionResult::new(
+            response,
+            statement.result_specs(),
+            node,
+            token,
+            achieved_consistency,
+        )
     }
 
     pub fn execute_paged<S, V>(

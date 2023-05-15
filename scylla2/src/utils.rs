@@ -1,4 +1,4 @@
-use std::{io, iter::Fuse, net::SocketAddr};
+use std::{io, iter::Fuse, net::SocketAddr, sync::Mutex};
 
 use scylla2_cql::response::ResponseBody;
 
@@ -100,5 +100,31 @@ where
         } else {
             panic!("Empty iterator");
         }
+    }
+}
+
+struct SharedIterator<I>(Mutex<I>);
+
+impl<I> Iterator for SharedIterator<I>
+where
+    I: Iterator,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.lock().unwrap().next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.lock().unwrap().size_hint()
+    }
+}
+
+impl<I> ExactSizeIterator for SharedIterator<I>
+where
+    I: ExactSizeIterator,
+{
+    fn len(&self) -> usize {
+        self.0.lock().unwrap().len()
     }
 }

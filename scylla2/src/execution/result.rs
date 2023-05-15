@@ -16,8 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ExecutionError, RowsError},
-    execution::ExecutionProfile,
-    topology::node::Node,
+    topology::{node::Node, partitioner::Token},
     utils::invalid_response,
 };
 
@@ -28,14 +27,18 @@ pub struct ExecutionResult {
     warnings: Vec<String>,
     column_specs: Option<Arc<[ColumnSpec]>>,
     result: CqlResult,
-    info: ExecutionInfo,
+    node: Arc<Node>,
+    token: Option<Token>,
+    achieved_consistency: Consistency,
 }
 
 impl ExecutionResult {
     pub(crate) fn new(
         response: Response,
         column_specs: Option<Arc<[ColumnSpec]>>,
-        info: ExecutionInfo,
+        node: Arc<Node>,
+        token: Option<Token>,
+        achieved_consistency: Consistency,
     ) -> Result<Self, ExecutionError> {
         let response = response.ok()?;
         let result = match response.body {
@@ -48,7 +51,9 @@ impl ExecutionResult {
             warnings: response.warnings,
             result,
             column_specs,
-            info,
+            node,
+            token,
+            achieved_consistency,
         })
     }
 
@@ -113,41 +118,12 @@ impl ExecutionResult {
         }
     }
 
-    pub fn info(&self) -> &ExecutionInfo {
-        &self.info
-    }
-
-    pub async fn wait_schema_agreement(&self) -> Uuid {
-        self.info.node.wait_schema_agreement().await
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExecutionInfo {
-    node: Arc<Node>,
-    profile: Arc<ExecutionProfile>,
-    achieved_consistency: Consistency,
-}
-
-impl ExecutionInfo {
-    pub(crate) fn new(
-        node: Arc<Node>,
-        profile: Arc<ExecutionProfile>,
-        achieved_consistency: Consistency,
-    ) -> Self {
-        Self {
-            node,
-            profile,
-            achieved_consistency,
-        }
-    }
-
     pub fn node(&self) -> &Arc<Node> {
         &self.node
     }
 
-    pub fn profile(&self) -> &Arc<ExecutionProfile> {
-        &self.profile
+    pub fn token(&self) -> Option<Token> {
+        self.token
     }
 
     pub fn achieved_consistency(&self) -> Consistency {
