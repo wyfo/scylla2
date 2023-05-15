@@ -1,15 +1,12 @@
 use std::io;
 
-use scylla2_cql::{
-    error::{DatabaseError, InvalidRequest, TypeError},
-    event::SchemaChangeEvent,
-};
+use scylla2_cql::event::SchemaChangeEvent;
 use tokio::time::error::Elapsed;
-#[rustfmt::skip]
-pub use scylla2_cql::error::ConnectionError;
-use scylla2_cql::error::DatabaseErrorKind;
 
 use crate::execution::retry::RetryableError;
+
+#[rustfmt::skip]
+pub use scylla2_cql::error::*;
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
