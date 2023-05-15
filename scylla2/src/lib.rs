@@ -18,6 +18,7 @@ mod utils;
 pub use scylla2_cql as cql;
 
 pub use crate::{
+    execution::{ExecutionProfile, ExecutionResult},
     session::{config::SessionConfig, Session},
     statement::{
         batch::{Batch, BatchN},

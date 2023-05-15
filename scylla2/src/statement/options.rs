@@ -9,7 +9,7 @@ use scylla2_cql::{
     Consistency, SerialConsistency,
 };
 
-use crate::{execution::profile::ExecutionProfile, topology::partitioner::Token};
+use crate::{execution::ExecutionProfile, topology::partitioner::Token};
 
 #[derive(Debug, Clone, Default)]
 pub struct StatementOptions {

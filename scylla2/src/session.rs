@@ -29,8 +29,8 @@ use crate::{
     },
     event::{DatabaseEventHandler, SessionEventHandler},
     execution::{
-        load_balancing::LoadBalancingPolicy, make_request, profile::ExecutionProfile,
-        utils::cql_query, ExecutionResult,
+        load_balancing::LoadBalancingPolicy, make_request, utils::cql_query, ExecutionProfile,
+        ExecutionResult,
     },
     session::{
         config::{NodeAddress, SessionConfig},

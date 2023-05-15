@@ -14,7 +14,7 @@ use crate::{
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
     error::SessionError,
     event::{DatabaseEventHandler, SessionEventHandler},
-    execution::profile::ExecutionProfile,
+    execution::ExecutionProfile,
     session::Session,
     topology::{
         node::PoolSize,
