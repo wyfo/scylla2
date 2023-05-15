@@ -40,13 +40,16 @@ impl ExecutionProfile {
         self
     }
 
-    pub fn serial_consistency(mut self, consistency: SerialConsistency) -> Self {
-        self.serial_consistency = Some(consistency);
+    pub fn serial_consistency(
+        mut self,
+        serial_consistency: impl Into<Option<SerialConsistency>>,
+    ) -> Self {
+        self.serial_consistency = serial_consistency.into();
         self
     }
 
-    pub fn request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = Some(timeout);
+    pub fn request_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.request_timeout = timeout.into();
         self
     }
 

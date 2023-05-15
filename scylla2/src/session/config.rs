@@ -6,7 +6,8 @@ use std::{
 };
 
 use scylla2_cql::{
-    frame::compression::Compression, protocol::auth::AuthenticationProtocol, ProtocolVersion,
+    frame::compression::Compression, protocol::auth::AuthenticationProtocol, Consistency,
+    ProtocolVersion, SerialConsistency,
 };
 
 use crate::{
@@ -14,7 +15,10 @@ use crate::{
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
     error::SessionError,
     event::{DatabaseEventHandler, SessionEventHandler},
-    execution::ExecutionProfile,
+    execution::{
+        load_balancing::LoadBalancingPolicy, retry::RetryPolicy,
+        speculative::SpeculativeExecutionPolicy, ExecutionProfile,
+    },
     session::Session,
     topology::{
         node::PoolSize,
@@ -177,6 +181,11 @@ impl SessionConfig {
         self
     }
 
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        Arc::make_mut(&mut self.execution_profile).consistency = consistency;
+        self
+    }
+
     pub fn database_event_handler(mut self, handler: impl DatabaseEventHandler + 'static) -> Self {
         self.database_event_handler = Some(Arc::new(handler));
         self
@@ -210,6 +219,11 @@ impl SessionConfig {
         execution_profile: impl Into<Arc<ExecutionProfile>>,
     ) -> Self {
         self.execution_profile = execution_profile.into();
+        self
+    }
+
+    pub fn load_balancing_policy(mut self, policy: impl Into<LoadBalancingPolicy>) -> Self {
+        Arc::make_mut(&mut self.execution_profile).load_balancing_policy = policy.into();
         self
     }
 
@@ -251,8 +265,26 @@ impl SessionConfig {
         self
     }
 
+    pub fn request_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        Arc::make_mut(&mut self.execution_profile).request_timeout = timeout.into();
+        self
+    }
+
+    pub fn retry_policy(mut self, policy: impl RetryPolicy + 'static) -> Self {
+        Arc::make_mut(&mut self.execution_profile).retry_policy = Arc::new(policy);
+        self
+    }
+
     pub fn schema_agreement_interval(mut self, interval: Duration) -> Self {
         self.schema_agreement_interval = interval;
+        self
+    }
+
+    pub fn serial_consistency(
+        mut self,
+        serial_consistency: impl Into<Option<SerialConsistency>>,
+    ) -> Self {
+        Arc::make_mut(&mut self.execution_profile).serial_consistency = serial_consistency.into();
         self
     }
 
@@ -261,9 +293,18 @@ impl SessionConfig {
         self
     }
 
+    pub fn speculative_execution_policy(
+        mut self,
+        policy: impl SpeculativeExecutionPolicy + 'static,
+    ) -> Self {
+        Arc::make_mut(&mut self.execution_profile).speculative_execution_policy =
+            Some(Arc::new(policy));
+        self
+    }
+
     #[cfg(feature = "ssl")]
-    pub fn ssl_context(mut self, ssl_context: openssl::ssl::SslContext) -> Self {
-        self.ssl_context = Some(ssl_context);
+    pub fn ssl_context(mut self, ssl_context: impl Into<Option<openssl::ssl::SslContext>>) -> Self {
+        self.ssl_context = ssl_context.into();
         self
     }
 

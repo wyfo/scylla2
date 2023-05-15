@@ -35,8 +35,8 @@ impl ConnectionConfig {
         Self::default()
     }
 
-    pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
-        self.heartbeat_interval = Some(interval);
+    pub fn heartbeat_interval(mut self, interval: impl Into<Option<Duration>>) -> Self {
+        self.heartbeat_interval = interval.into();
         self
     }
 
