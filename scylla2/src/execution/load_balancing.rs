@@ -11,7 +11,7 @@ pub trait DynamicLoadBalancingPolicy: fmt::Debug + Send + Sync {
         session: &'a Session,
         partition: Option<&'a Partition>,
         is_lwt: bool,
-    ) -> Box<dyn Iterator<Item = &'a Arc<Node>>>;
+    ) -> Box<dyn Iterator<Item = &'a Arc<Node>> + 'a>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -24,9 +24,18 @@ pub enum LoadBalancingPolicy {
 
 impl<T> From<T> for LoadBalancingPolicy
 where
-    T: Into<Arc<dyn DynamicLoadBalancingPolicy>>,
+    T: DynamicLoadBalancingPolicy + 'static,
 {
     fn from(value: T) -> Self {
-        LoadBalancingPolicy::Dynamic(value.into())
+        LoadBalancingPolicy::Dynamic(Arc::new(value))
+    }
+}
+
+impl<T> From<Arc<T>> for LoadBalancingPolicy
+where
+    T: DynamicLoadBalancingPolicy + 'static,
+{
+    fn from(value: Arc<T>) -> Self {
+        LoadBalancingPolicy::Dynamic(value)
     }
 }
