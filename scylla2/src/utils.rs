@@ -103,9 +103,9 @@ where
     }
 }
 
-struct SharedIterator<I>(Mutex<I>);
+pub(crate) struct SharedIterator<I>(pub(crate) Mutex<I>);
 
-impl<I> Iterator for SharedIterator<I>
+impl<I> Iterator for &SharedIterator<I>
 where
     I: Iterator,
 {
@@ -120,7 +120,7 @@ where
     }
 }
 
-impl<I> ExactSizeIterator for SharedIterator<I>
+impl<I> ExactSizeIterator for &SharedIterator<I>
 where
     I: ExactSizeIterator,
 {

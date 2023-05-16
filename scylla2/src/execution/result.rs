@@ -1,7 +1,6 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use scylla2_cql::{
-    event::SchemaChangeEvent,
     response::{
         result::{
             column_spec::ColumnSpec,
@@ -69,6 +68,33 @@ impl ExecutionResult {
         &self.warnings
     }
 
+    pub fn node(&self) -> &Arc<Node> {
+        &self.node
+    }
+
+    pub fn token(&self) -> Option<Token> {
+        self.token
+    }
+
+    pub fn achieved_consistency(&self) -> Consistency {
+        self.achieved_consistency
+    }
+
+    pub fn as_result(&self) -> &CqlResult {
+        &self.result
+    }
+
+    pub fn into_result(self) -> CqlResult {
+        self.result
+    }
+
+    fn as_rows(&self) -> Option<&Rows> {
+        match &self.result {
+            CqlResult::Rows(rows) => Some(rows),
+            _ => None,
+        }
+    }
+
     pub fn paging_state(&self) -> Option<&PagingState> {
         self.as_rows()?.metadata.paging_state.as_ref()
     }
@@ -77,20 +103,6 @@ impl ExecutionResult {
         self.column_specs
             .as_ref()
             .or_else(|| self.as_rows()?.metadata.column_specs.as_ref())
-    }
-
-    pub fn as_rows(&self) -> Option<&Rows> {
-        match &self.result {
-            CqlResult::Rows(rows) => Some(rows),
-            _ => None,
-        }
-    }
-
-    pub fn into_rows(self) -> Option<Rows> {
-        match self.result {
-            CqlResult::Rows(rows) => Some(rows),
-            _ => None,
-        }
     }
 
     pub fn rows<'a, P>(&'a self) -> Result<RowIterator<'a, P>, RowsError>
@@ -102,31 +114,5 @@ impl ExecutionResult {
             .ok_or(RowsError::NoRows)?
             .parse(self.column_specs().map(Deref::deref))
             .ok_or(RowsError::NoMetadata)??)
-    }
-
-    pub fn as_schema_change(&self) -> Option<&SchemaChangeEvent> {
-        match &self.result {
-            CqlResult::SchemaChange(change) => Some(change),
-            _ => None,
-        }
-    }
-
-    pub fn into_schema_change(self) -> Option<SchemaChangeEvent> {
-        match self.result {
-            CqlResult::SchemaChange(change) => Some(change),
-            _ => None,
-        }
-    }
-
-    pub fn node(&self) -> &Arc<Node> {
-        &self.node
-    }
-
-    pub fn token(&self) -> Option<Token> {
-        self.token
-    }
-
-    pub fn achieved_consistency(&self) -> Consistency {
-        self.achieved_consistency
     }
 }

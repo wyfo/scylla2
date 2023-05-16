@@ -29,7 +29,7 @@ use crate::{
     },
     event::{DatabaseEventHandler, SessionEventHandler},
     execution::{
-        load_balancing::LoadBalancingPolicy, make_request, utils::cql_query, ExecutionProfile,
+        load_balancing::LoadBalancingPolicy, utils::cql_query, Execution, ExecutionProfile,
         ExecutionResult,
     },
     session::{
@@ -247,68 +247,60 @@ impl Session {
             .filter(|_| statement.is_lwt().unwrap_or(true));
         let request =
             statement.as_request(profile.consistency, serial_consistency, &options, values);
-        let token = partition.as_ref().map(Partition::token);
-        let (response, node, achieved_consistency) = match (
+        let execution = Execution::new(
+            &statement,
+            &request,
+            options.custom_payload.as_ref(),
+            profile,
+        );
+        let result = match (
             &profile.load_balancing_policy,
             partition,
             statement.is_lwt(),
         ) {
             (LoadBalancingPolicy::TokenAware, Some(partition), Some(true)) => {
-                make_request(
-                    &request,
-                    options.custom_payload.as_ref(),
-                    statement.idempotent(),
-                    profile,
-                    partition.replicas().iter(),
-                    Some(partition.token()),
-                )
-                .await?
+                execution
+                    .run(partition.replicas().iter(), Some(partition.token()))
+                    .await?
             }
             (LoadBalancingPolicy::TokenAware, Some(partition), _) => {
-                make_request(
-                    &request,
-                    options.custom_payload.as_ref(),
-                    statement.idempotent(),
-                    profile,
-                    partition.local_then_remote_replicas(),
-                    Some(partition.token()),
-                )
-                .await?
+                execution
+                    .run(
+                        partition.local_then_remote_replicas(),
+                        Some(partition.token()),
+                    )
+                    .await?
             }
             (LoadBalancingPolicy::TokenAware, None, _) => {
                 let topology = self.topology();
                 let nodes = topology.nodes();
-                make_request(
-                    &request,
-                    options.custom_payload.as_ref(),
-                    statement.idempotent(),
-                    profile,
-                    nodes.choose_multiple(&mut rand::thread_rng(), nodes.len()),
-                    None,
-                )
-                .await?
+                execution
+                    .run(
+                        nodes.choose_multiple(&mut rand::thread_rng(), nodes.len()),
+                        None,
+                    )
+                    .await?
             }
             (LoadBalancingPolicy::Dynamic(policy), partition, is_lwt) => {
-                make_request(
-                    &request,
-                    options.custom_payload.as_ref(),
-                    statement.idempotent(),
-                    profile,
-                    policy.query_plan(self, partition.as_ref(), is_lwt.unwrap_or(false)),
-                    partition.as_ref().map(Partition::token),
-                )
-                .await?
+                execution
+                    .run(
+                        policy.query_plan(self, partition.as_ref(), is_lwt.unwrap_or(false)),
+                        partition.as_ref().map(Partition::token),
+                    )
+                    .await?
             }
         };
-        match (&response.body, self.0.auto_await_schema_agreement_timeout) {
-            (ResponseBody::Result(CqlResult::SchemaChange(event)), Some(timeout)) => {
-                tokio::time::timeout(timeout, node.wait_schema_agreement())
+
+        match (
+            result.as_result(),
+            self.0.auto_await_schema_agreement_timeout,
+        ) {
+            (CqlResult::SchemaChange(event), Some(timeout)) => {
+                tokio::time::timeout(timeout, result.node().wait_schema_agreement())
                     .await
                     .map_err(|_| ExecutionError::SchemaAgreementTimeout(event.clone()))?;
             }
-            (ResponseBody::Result(CqlResult::Rows(rows)), _)
-                if rows.metadata.new_metadata_id.is_some() =>
-            {
+            (CqlResult::Rows(rows), _) if rows.metadata.new_metadata_id.is_some() => {
                 // TODO maybe a add a config flag to decide if an error has to be
                 // raised here
                 // TODO some statements (e.g. ArcSwap<Arc<PreparedStatement>>)
@@ -318,13 +310,7 @@ impl Session {
             }
             _ => {}
         }
-        ExecutionResult::new(
-            response,
-            statement.result_specs(),
-            node,
-            token,
-            achieved_consistency,
-        )
+        Ok(result)
     }
 
     pub fn execute_paged<S, V>(
