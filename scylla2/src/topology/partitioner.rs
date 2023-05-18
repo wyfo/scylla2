@@ -175,7 +175,7 @@ impl Partitioner {
         } else {
             let mut buffer = [0; TOKEN_STACK_BUFFER_SIZE];
             values.serialize_partition_key(pk_indexes, &mut buffer);
-            self.hash(&buffer)
+            self.hash(&buffer[..size])
         };
         Ok(Token(token))
     }
