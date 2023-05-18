@@ -4,6 +4,7 @@ use scylla2_cql::{
     response::{
         result::{
             column_spec::ColumnSpec,
+            lwt::LwtApplied,
             rows::{PagingState, RowIterator, RowParser, Rows},
             CqlResult,
         },
@@ -14,7 +15,7 @@ use scylla2_cql::{
 use uuid::Uuid;
 
 use crate::{
-    error::{ExecutionError, RowsError},
+    error::{ExecutionError, LwtAppliedError, RowsError},
     topology::{node::Node, partitioner::Token},
     utils::invalid_response,
 };
@@ -114,5 +115,13 @@ impl ExecutionResult {
             .ok_or(RowsError::NoRows)?
             .parse(self.column_specs().map(Deref::deref))
             .ok_or(RowsError::NoMetadata)??)
+    }
+
+    pub fn lwt_applied(&self) -> Result<bool, LwtAppliedError> {
+        Ok(self
+            .rows::<LwtApplied>()?
+            .next()
+            .ok_or(RowsError::NoRows)??
+            .0)
     }
 }

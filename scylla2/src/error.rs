@@ -135,5 +135,13 @@ pub enum RowsError {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum LwtAppliedError {
+    #[error(transparent)]
+    Rows(#[from] RowsError),
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("Unknown partitioner")]
 pub struct UnknownPartitioner;
