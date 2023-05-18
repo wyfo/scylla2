@@ -14,7 +14,7 @@ use crate::{
     event::SessionEventHandler,
     execution::utils::cql_query,
     topology::{
-        node::{Node, NodeConfig, NodeDisconnectionReason, NodeEvent},
+        node::{ConnectionResult, Node, NodeConfig, NodeDisconnectionReason, NodeEvent},
         sharding::Sharder,
     },
     utils::RepeatLast,
@@ -23,8 +23,7 @@ use crate::{
 const EXCESS_CONNECTION_BOUND_PER_SHARD_MULTIPLIER: usize = 10;
 
 enum ConnectionEvent {
-    Opened(TcpConnection, Supported),
-    Failed,
+    Opened(ConnectionResult),
     Closed(usize, bool),
 }
 
@@ -83,11 +82,18 @@ impl NodeWorker {
                     self.node
                         .update_address(self.config.address_translator.as_ref())
                         .await;
-                    if let Some((conn, supported)) =
-                        self.node.open_connection(&self.config, None, None).await
-                    {
-                        self.try_start(conn, supported)?;
-                        break;
+                    match self.node.open_connection(&self.config, None, None).await {
+                        ConnectionResult::Connected(conn, supported) => {
+                            self.try_start(conn, supported)?;
+                            break;
+                        }
+                        ConnectionResult::ProtocolVersionChanged => {
+                            self.node.acknowledge_disconnection(
+                                NodeDisconnectionReason::ProtocolVersionChanged,
+                            );
+                            return Err(Disconnected);
+                        }
+                        ConnectionResult::Error => {}
                     }
                     tokio::select! {
                         Some(NodeEvent::Disconnect(reason)) = self.node_events.recv() => {
@@ -187,11 +193,16 @@ impl NodeWorker {
                 else => continue,
             };
             match event {
-                ConnectionEvent::Opened(conn, supported) => {
+                ConnectionEvent::Opened(ConnectionResult::Connected(conn, supported)) => {
                     opening_count -= 1;
                     self.try_start(conn, supported)?;
                 }
-                ConnectionEvent::Failed => {
+                ConnectionEvent::Opened(ConnectionResult::ProtocolVersionChanged) => {
+                    self.node
+                        .acknowledge_disconnection(NodeDisconnectionReason::ProtocolVersionChanged);
+                    return Err(Disconnected);
+                }
+                ConnectionEvent::Opened(ConnectionResult::Error) => {
                     opening_count -= 1;
                 }
                 ConnectionEvent::Closed(conn_index, error) => {
@@ -216,14 +227,10 @@ async fn open_connection(
     supported_shard_aware_port: Option<u16>,
     conn_events: mpsc::UnboundedSender<ConnectionEvent>,
 ) {
-    let event = match node
+    let result = node
         .open_connection(&config, Some(shard), supported_shard_aware_port)
-        .await
-    {
-        Some((conn, supported)) => ConnectionEvent::Opened(conn, supported),
-        None => ConnectionEvent::Failed,
-    };
-    conn_events.send(event).ok();
+        .await;
+    conn_events.send(ConnectionEvent::Opened(result)).ok();
 }
 
 #[allow(clippy::too_many_arguments)]

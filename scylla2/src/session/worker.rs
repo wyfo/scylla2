@@ -109,7 +109,9 @@ pub(super) async fn node_worker(
             return;
         };
         if let Some(
-            NodeDisconnectionReason::ShardingChanged | NodeDisconnectionReason::ExtensionsChanged,
+            NodeDisconnectionReason::ShardingChanged
+            | NodeDisconnectionReason::ProtocolVersionChanged
+            | NodeDisconnectionReason::ExtensionsChanged,
         ) = reason
         {
             tokio::spawn(async move { session.refresh_topology().await });

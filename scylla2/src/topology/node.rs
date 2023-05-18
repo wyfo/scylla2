@@ -14,8 +14,12 @@ use std::{
 use once_cell::sync::OnceCell;
 use rand::seq::SliceRandom;
 use scylla2_cql::{
-    extensions::ProtocolExtensions, frame::compression::Compression,
-    protocol::auth::AuthenticationProtocol, response::supported::Supported, ProtocolVersion,
+    error::{ConnectionError, DatabaseErrorKind},
+    extensions::ProtocolExtensions,
+    frame::compression::Compression,
+    protocol::auth::AuthenticationProtocol,
+    response::supported::Supported,
+    ProtocolVersion,
 };
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
@@ -136,8 +140,9 @@ const REMOVED: isize = -2;
 const PEER_CHANGED: isize = -3;
 const DISTANCE_CHANGED: isize = -4;
 const SHARDING_CHANGED: isize = -5;
-const EXTENSIONS_CHANGED: isize = -6;
-const SESSION_CLOSED: isize = -7;
+const PROTOCOL_VERSION_CHANGED: isize = -6;
+const EXTENSIONS_CHANGED: isize = -7;
+const SESSION_CLOSED: isize = -8;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[non_exhaustive]
@@ -147,6 +152,7 @@ pub enum NodeDisconnectionReason {
     PeerChanged,
     DistanceChanged,
     ShardingChanged,
+    ProtocolVersionChanged,
     ExtensionsChanged,
     SessionClosed,
 }
@@ -256,6 +262,7 @@ impl Node {
             PEER_CHANGED => NodeDisconnectionReason::PeerChanged.into(),
             DISTANCE_CHANGED => NodeDisconnectionReason::DistanceChanged.into(),
             SHARDING_CHANGED => NodeDisconnectionReason::ShardingChanged.into(),
+            PROTOCOL_VERSION_CHANGED => NodeDisconnectionReason::ProtocolVersionChanged.into(),
             EXTENSIONS_CHANGED => NodeDisconnectionReason::ExtensionsChanged.into(),
             SESSION_CLOSED => NodeDisconnectionReason::SessionClosed.into(),
             isize::MIN => NodeStatus::Connecting,
@@ -393,6 +400,7 @@ impl Node {
             NodeDisconnectionReason::PeerChanged => PEER_CHANGED,
             NodeDisconnectionReason::DistanceChanged => DISTANCE_CHANGED,
             NodeDisconnectionReason::ShardingChanged => SHARDING_CHANGED,
+            NodeDisconnectionReason::ProtocolVersionChanged => PROTOCOL_VERSION_CHANGED,
             NodeDisconnectionReason::ExtensionsChanged => EXTENSIONS_CHANGED,
             NodeDisconnectionReason::SessionClosed => SESSION_CLOSED,
         };
@@ -504,7 +512,7 @@ impl Node {
         config: &NodeConfig,
         shard: Option<u16>,
         supported_shard_aware_port: Option<u16>,
-    ) -> Option<(TcpConnection, Supported)> {
+    ) -> ConnectionResult {
         let (address, shard_aware_port) = self.address.lock().unwrap().unwrap();
         let mut shard_info = match (
             shard,
@@ -535,16 +543,27 @@ impl Node {
             )
             .await
             {
-                Ok((conn, supported)) => Some((conn, supported)),
+                Ok((conn, supported)) => ConnectionResult::Connected(conn, supported),
+                Err(ConnectionError::Database(err))
+                    if err.kind == DatabaseErrorKind::ProtocolError =>
+                {
+                    ConnectionResult::ProtocolVersionChanged
+                }
                 Err(err) => {
                     if shard_info.is_some() {
                         shard_info = None;
                         continue;
                     }
                     self.session_event_handler.connection_failed(self, err);
-                    None
+                    ConnectionResult::Error
                 }
             };
         }
     }
+}
+
+enum ConnectionResult {
+    Connected(TcpConnection, Supported),
+    ProtocolVersionChanged,
+    Error,
 }
