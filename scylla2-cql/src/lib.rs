@@ -11,6 +11,7 @@ pub mod error;
 pub mod event;
 pub mod extensions;
 pub mod frame;
+pub mod prelude;
 #[cfg(feature = "protocol")]
 pub mod protocol;
 pub mod request;
@@ -18,16 +19,7 @@ pub mod response;
 mod utils;
 pub mod value;
 
-#[cfg(feature = "cql-value")]
-pub use crate::value::CqlValue;
-pub use crate::{
-    request::query::values::{NamedQueryValues, QueryValues},
-    response::result::rows::FromRow,
-    value::{
-        convert::{AsValue, FromValue},
-        iterator::{AsValueIter, FromValueIter},
-    },
-};
+pub use prelude::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, strum::EnumIter)]
 #[non_exhaustive]
@@ -35,27 +27,25 @@ pub enum ProtocolVersion {
     V4,
     V5,
 }
+
 pub const CLIENT_V4: u8 = 0x04;
 pub const CLIENT_V5: u8 = 0x05;
 pub const SERVER_V4: u8 = 0x84;
 pub const SERVER_V5: u8 = 0x85;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct VersionByte(pub u8);
-
 impl ProtocolVersion {
-    pub fn client(self) -> VersionByte {
-        VersionByte(match self {
-            Self::V4 => 0x04,
-            Self::V5 => 0x05,
-        })
+    pub fn client(self) -> u8 {
+        match self {
+            Self::V4 => CLIENT_V4,
+            Self::V5 => CLIENT_V5,
+        }
     }
 
-    pub fn server(self) -> VersionByte {
-        VersionByte(match self {
-            Self::V4 => 0x84,
-            Self::V5 => 0x85,
-        })
+    pub fn server(self) -> u8 {
+        match self {
+            Self::V4 => SERVER_V4,
+            Self::V5 => SERVER_V5,
+        }
     }
 }
 

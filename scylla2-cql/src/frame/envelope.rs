@@ -7,7 +7,6 @@ use crate::{
     cql::{ReadCql, WriteCql},
     error::ValueTooBig,
     utils::invalid_data,
-    VersionByte,
 };
 
 pub const ENVELOPE_HEADER_SIZE: usize = 9;
@@ -48,7 +47,7 @@ pub enum EnvelopeHeaderFlag {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct EnvelopeHeader {
-    pub version: VersionByte,
+    pub version: u8,
     pub flags: BitFlags<EnvelopeHeaderFlag>,
     pub stream: i16,
     pub opcode: OpCode,
@@ -59,7 +58,7 @@ impl EnvelopeHeader {
     pub fn serialize(self) -> [u8; ENVELOPE_HEADER_SIZE] {
         let mut buffer = [0; ENVELOPE_HEADER_SIZE];
         let buf = &mut &mut buffer[..];
-        self.version.0.write_cql(buf);
+        self.version.write_cql(buf);
         self.flags.write_cql(buf);
         self.stream.write_cql(buf);
         (self.opcode as u8).write_cql(buf);
@@ -69,7 +68,7 @@ impl EnvelopeHeader {
 
     pub fn deserialize(buf: [u8; ENVELOPE_HEADER_SIZE]) -> io::Result<Self> {
         let buf = &mut &buf[..];
-        let version = VersionByte(u8::read_cql(buf)?);
+        let version = u8::read_cql(buf)?;
         let flags = BitFlags::read_cql(buf)?;
         let stream = i16::read_cql(buf)?;
         let opcode = OpCode::from_repr(u8::read_cql(buf)?)
