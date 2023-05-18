@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     marker::PhantomData,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -62,10 +61,9 @@ where
         query_plan: impl Iterator<Item = &Arc<Node>>,
         token: Option<Token>,
     ) -> Result<ExecutionResult, ExecutionError> {
-        let start = Instant::now();
         let execution = self.run_speculative(query_plan, token);
         if let Some(timeout) = self.profile.request_timeout {
-            tokio::time::timeout_at((start + timeout).into(), execution).await?
+            tokio::time::timeout(timeout, execution).await?
         } else {
             execution.await
         }
@@ -128,7 +126,7 @@ where
                         .retry_policy
                         .retry(err, self.statement.idempotent(), retry_count)
                 };
-                let (retry_decision, error): (_, ExecutionError) = match result.map(Response::ok) {
+                let (retry_decision, error) = match result.map(Response::ok) {
                     Ok(Ok(response)) => {
                         return ExecutionResult::new(
                             response,
