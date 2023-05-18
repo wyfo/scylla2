@@ -250,6 +250,7 @@ impl Session {
         let execution = Execution::new(
             &statement,
             &request,
+            options.keyspace.as_deref(),
             options.custom_payload.as_ref(),
             profile,
         );
@@ -382,7 +383,7 @@ impl Session {
             .nodes()
             .iter()
             .filter_map(|node| node.get_random_connection())
-            .map(|conn| conn.send(&prepare, false, None))
+            .map(|conn| conn.send_queued(&prepare, false, None))
             .collect();
         while let Some(res) = executions.next().await {
             match res {

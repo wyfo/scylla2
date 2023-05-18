@@ -6,7 +6,8 @@ use std::{
 
 use futures::{stream::FuturesUnordered, StreamExt};
 use scylla2_cql::{
-    request::{Request, RequestExt},
+    error::DatabaseErrorKind,
+    request::{prepare::Prepare, Request, RequestExt},
     response::Response,
 };
 
@@ -27,23 +28,26 @@ pub use crate::execution::{profile::ExecutionProfile, result::ExecutionResult};
 use crate::{statement::Statement, utils::SharedIterator};
 
 pub(crate) struct Execution<'a, S, V, R> {
-    pub(crate) statement: &'a S,
-    pub(crate) request: &'a R,
-    pub(crate) custom_payload: Option<&'a HashMap<String, Vec<u8>>>,
-    pub(crate) profile: &'a ExecutionProfile,
-    pub(crate) _phantom: PhantomData<V>,
+    statement: &'a S,
+    request: &'a R,
+    keyspace: Option<&'a str>,
+    custom_payload: Option<&'a HashMap<String, Vec<u8>>>,
+    profile: &'a ExecutionProfile,
+    _phantom: PhantomData<V>,
 }
 
 impl<'a, S, V, R> Execution<'a, S, V, R> {
     pub(crate) fn new(
         statement: &'a S,
         request: &'a R,
+        keyspace: Option<&'a str>,
         custom_payload: Option<&'a HashMap<String, Vec<u8>>>,
         profile: &'a ExecutionProfile,
     ) -> Self {
         Self {
             statement,
             request,
+            keyspace,
             custom_payload,
             profile,
             _phantom: PhantomData,
@@ -135,6 +139,21 @@ where
                             token,
                             consistency.unwrap_or(self.profile.consistency),
                         );
+                    }
+                    Ok(Err(err)) if matches!(err.kind, DatabaseErrorKind::Unprepared { .. }) => {
+                        let DatabaseErrorKind::Unprepared { statement_id } = &err.kind else { unreachable!() };
+                        match self.statement.reprepare(statement_id) {
+                            Some(statement) => {
+                                let prepare = Prepare {
+                                    statement,
+                                    keyspace: self.keyspace,
+                                };
+                                conn.send_queued(prepare, false, None).await?.ok()?
+                            }
+                            None => return Err(err.into()),
+                        };
+                        retry_count -= 1;
+                        (RetryDecision::RetrySameNode(None), err.into())
                     }
                     Ok(Err(err)) => (retry(RetryableError::Database(&err)), err.into()),
                     Err(RequestError::Io(err)) => (retry(RetryableError::Io(&err)), err.into()),

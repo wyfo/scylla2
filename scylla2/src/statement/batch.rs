@@ -99,6 +99,13 @@ where
     fn is_lwt(&self) -> Option<bool> {
         self.statements.get(0)?.is_lwt()
     }
+
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        self.statements
+            .iter()
+            .filter_map(|s| s.reprepare(id))
+            .next()
+    }
 }
 
 impl<'b, S, V> Statement<&'b [V]> for Batch<Vec<S>>
@@ -146,6 +153,13 @@ where
 
     fn is_lwt(&self) -> Option<bool> {
         self.statements.get(0)?.is_lwt()
+    }
+
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        self.statements
+            .iter()
+            .filter_map(|s| s.reprepare(id))
+            .next()
     }
 }
 
@@ -211,6 +225,18 @@ macro_rules! batch {
             fn is_lwt(&self) -> Option<bool> {
                 self.0.is_lwt()
             }
+
+            fn reprepare(&self, id: &[u8]) -> Option<&str> {
+                if let Some(stmt) = self.0.reprepare(id) {
+                    return Some(stmt)
+                }
+                $(
+                    if let Some(stmt) = self.$idx.reprepare(id) {
+                        return Some(stmt)
+                    }
+                )*
+                None
+            }
         }
 
         impl<'b, S0, V0, $($stmt, $values),*> Statement<(V0, $($values),*)> for Batch<(S0, $($stmt),*)>
@@ -255,6 +281,18 @@ macro_rules! batch {
             fn is_lwt(&self) -> Option<bool> {
                 self.statements.0.is_lwt()
             }
+
+            fn reprepare(&self, id: &[u8]) -> Option<&str> {
+                if let Some(stmt) = self.statements.0.reprepare(id) {
+                    return Some(stmt)
+                }
+                $(
+                    if let Some(stmt) = self.statements.$idx.reprepare(id) {
+                        return Some(stmt)
+                    }
+                )*
+                None
+            }
         }
 
 
@@ -296,6 +334,18 @@ macro_rules! batch {
 
             fn is_lwt(&self) -> Option<bool> {
                 <_ as Statement<V0>>::is_lwt(&self.statements[0])
+            }
+
+            fn reprepare(&self, id: &[u8]) -> Option<&str> {
+                if let Some(stmt) = <_ as Statement<V0>>::reprepare(&self.statements[0], id) {
+                    return Some(stmt)
+                }
+                $(
+                    if let Some(stmt) = <_ as Statement<$values>>::reprepare(&self.statements[$idx], id) {
+                        return Some(stmt)
+                    }
+                )*
+                None
             }
         }
     };

@@ -96,4 +96,8 @@ where
     fn is_lwt(&self) -> Option<bool> {
         self.is_lwt
     }
+
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        (id == self.id.as_ref()).then_some(&self.statement)
+    }
 }

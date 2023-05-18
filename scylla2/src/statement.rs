@@ -42,6 +42,9 @@ pub trait Statement<V> {
     fn is_lwt(&self) -> Option<bool> {
         None
     }
+    fn reprepare(&self, _id: &[u8]) -> Option<&str> {
+        None
+    }
 }
 
 impl<T, V> Statement<V> for &T
@@ -73,6 +76,9 @@ where
     }
     fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
+    }
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        T::reprepare(self, id)
     }
 }
 
@@ -106,6 +112,9 @@ where
     fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
     }
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        T::reprepare(self, id)
+    }
 }
 
 impl<T, V> Statement<V> for Arc<T>
@@ -137,5 +146,8 @@ where
     }
     fn is_lwt(&self) -> Option<bool> {
         T::is_lwt(self)
+    }
+    fn reprepare(&self, id: &[u8]) -> Option<&str> {
+        T::reprepare(self, id)
     }
 }

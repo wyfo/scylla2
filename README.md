@@ -36,8 +36,7 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - examples
 - DOCUMENTATION -_-'
 - benchmark
-- prepare for tablet partitioning?
-- Prepared statements repreparation
+- prepare for serverless/tablet partitioning?
 - ...
 
 ## Performance
