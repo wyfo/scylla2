@@ -1,6 +1,6 @@
 # scylla2
 
-This is a POC (with more than 15kloc, maybe not a POC anymore) of a new implementation of the Scylla Rust driver, focusing on performance and memory consumption, but not only.
+This is a POC (with more than 10kloc, maybe not a POC anymore) of a new implementation of the Scylla Rust driver, focusing on performance and memory consumption, but not only.
 
 I've started the development at the end of October 2022, mostly on my spare times, so the development is quite messy (I often work during night when kids sleep), and there are still some things to do (hopefully, mostly tests at this time).
 
@@ -25,32 +25,28 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - Query plan caching (taking distance in account)
 - Optimized execution path to improve memory locality
 - Easier interface with only one method `Session::execute` instead of `Session::query`/`Session::execute`/`Session::batch`, and generics batches parametrized by their number of statement
-- Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
-- Access to database events and session events (connection opening/failure, node status update, topology update, schema agreement, etc.) using `tokio::sync::broadcast`
+- Access to database events and session events (connection opening/failure, node status update, topology update, schema agreement, etc.)
 - No schema metadata (but it can be built as a sidecar service, using dababase schema event and session schema agreement event to trigger refresh)
 - No internal API used for query execution, which means that custom execution can be built without too much effort
 
 ## TODO
 
-- Retry and speculative executions policies are not handled yet, but I'm still thinking about a design (and I need to fully understand speculative execution before)
-- Add execution metadata
 - tracing
 - test, tests, and more tests
+- examples
 - DOCUMENTATION -_-'
 - benchmark
 - prepare for tablet partitioning?
-- LWT master replica optimization
 - Prepared statements repreparation
-- Paged stream
 - ...
 
 ## Performance
 
 I've started some benchmark using https://github.com/pkolaczk/latte, and as expected, this driver performs better than the official one.
 
-Single threaded comparison with local database shows 40% performance improvement for example. The driver also keeps its at-most-one-allocation promise, so memory consumption is obviously lower by a lot.
+Single threaded comparison with local database shows 30-40% performance improvement for example. The driver also keeps its at-most-one-allocation promise, so memory consumption is obviously lower by a lot.
 
-Fun fact, when benchmark times are similar, mostly because of the database response time, this driver use 30% less CPU time.
+Fun fact, when benchmark times are similar, mostly because of the database response time, this driver use 30-40% less CPU time.
 
 ## Unsafe
 
