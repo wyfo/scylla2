@@ -177,7 +177,7 @@ pub struct Node {
     connection_pool: OnceCell<ConnectionPool>,
     status_notify: Notify,
     disconnection_channel: mpsc::UnboundedSender<NodeDisconnectionReason>,
-    session_event_handler: Option<Arc<dyn SessionEventHandler>>,
+    session_event_handler: Arc<dyn SessionEventHandler>,
     node_events: mpsc::UnboundedSender<NodeEvent>,
     schema_agreement_interval: Duration,
 }
@@ -206,7 +206,7 @@ impl Node {
         config: Option<Arc<NodeConfig>>,
         used_keyspace: Arc<tokio::sync::RwLock<Option<Arc<str>>>>,
         disconnection_channel: mpsc::UnboundedSender<NodeDisconnectionReason>,
-        session_event_handler: Option<Arc<dyn SessionEventHandler>>,
+        session_event_handler: Arc<dyn SessionEventHandler>,
         schema_agreement_interval: Duration,
     ) -> Arc<Self> {
         let (node_events_tx, node_events_rx) = mpsc::unbounded_channel();
@@ -440,7 +440,7 @@ impl Node {
     }
 
     async fn update_address(self: &Arc<Node>, address_translator: &dyn AddressTranslator) {
-        let Some(address) = address_translator.translate_or_warn(&self.peer, &self.session_event_handler).await.ok() else {
+        let Some(address) = address_translator.translate_or_warn(&self.peer, self.session_event_handler.as_ref()).await.ok() else {
             return
         };
         let prev_addr = self.address.lock().unwrap().replace(address);

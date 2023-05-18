@@ -5,7 +5,6 @@ use scylla2_cql::event::{Event, StatusChangeEvent};
 use tokio::sync::mpsc;
 
 use crate::{
-    event::{DatabaseEventHandler, SessionEventHandler},
     session::{Session, SessionInner},
     topology::node::NodeDisconnectionReason,
 };

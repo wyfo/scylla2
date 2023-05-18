@@ -19,6 +19,9 @@ use crate::{
     },
 };
 
+#[derive(Debug)]
+pub struct NoopHandler;
+
 #[allow(unused_variables)]
 pub trait DatabaseEventHandler: fmt::Debug + Send + Sync {
     fn topology_change(&self, event: TopologyChangeEvent) {}
@@ -26,7 +29,7 @@ pub trait DatabaseEventHandler: fmt::Debug + Send + Sync {
     fn schema_change(&self, event: SchemaChangeEvent) {}
 }
 
-impl DatabaseEventHandler for Option<Arc<dyn DatabaseEventHandler>> {}
+impl DatabaseEventHandler for NoopHandler {}
 
 #[allow(unused_variables)]
 pub trait SessionEventHandler: fmt::Debug + Send + Sync {
@@ -58,4 +61,4 @@ pub trait SessionEventHandler: fmt::Debug + Send + Sync {
     fn keyspace_used(&self, keyspace: &str) {}
 }
 
-impl SessionEventHandler for Option<Arc<dyn SessionEventHandler>> {}
+impl SessionEventHandler for NoopHandler {}

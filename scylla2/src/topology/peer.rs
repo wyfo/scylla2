@@ -64,7 +64,7 @@ pub(crate) trait AddressTranslatorExt: AddressTranslator {
     async fn translate_or_warn(
         &self,
         peer: &Peer,
-        event_handler: &impl SessionEventHandler,
+        event_handler: &dyn SessionEventHandler,
     ) -> io::Result<(SocketAddr, Option<ShardAwarePort>)> {
         match self.translate(peer).await {
             Ok(ok) => Ok(ok),

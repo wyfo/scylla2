@@ -46,11 +46,11 @@ pub(crate) struct ControlConnection {
     connection: tokio::sync::Mutex<Option<Connection>>,
     stream_generator: AtomicUsize,
     streams: Arc<Mutex<Option<StreamMap>>>,
-    session_event_handler: Option<Arc<dyn SessionEventHandler>>,
+    session_event_handler: Arc<dyn SessionEventHandler>,
 }
 
 impl ControlConnection {
-    pub(crate) fn new(session_event_handler: Option<Arc<dyn SessionEventHandler>>) -> Self {
+    pub(crate) fn new(session_event_handler: Arc<dyn SessionEventHandler>) -> Self {
         Self {
             connection: Default::default(),
             stream_generator: Default::default(),

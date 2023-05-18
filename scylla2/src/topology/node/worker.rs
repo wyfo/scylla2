@@ -11,7 +11,6 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     connection::{tcp::TcpConnection, Connection, ConnectionRef},
     error::Disconnected,
-    event::SessionEventHandler,
     execution::utils::cql_query,
     topology::{
         node::{ConnectionResult, Node, NodeConfig, NodeDisconnectionReason, NodeEvent},

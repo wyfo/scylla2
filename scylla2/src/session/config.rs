@@ -14,7 +14,7 @@ use crate::{
     auth::UserPassword,
     connection::config::{ConnectionConfig, InitSocket, ReconnectionPolicy},
     error::SessionError,
-    event::{DatabaseEventHandler, SessionEventHandler},
+    event::{DatabaseEventHandler, NoopHandler, SessionEventHandler},
     execution::{
         load_balancing::LoadBalancingPolicy, retry::RetryPolicy,
         speculative::SpeculativeExecutionPolicy, ExecutionProfile,
@@ -35,7 +35,7 @@ pub struct SessionConfig {
     pub compression_minimal_size: usize,
     pub connection_local: ConnectionConfig,
     pub connection_remote: ConnectionConfig,
-    pub database_event_handler: Option<Arc<dyn DatabaseEventHandler>>,
+    pub database_event_handler: Arc<dyn DatabaseEventHandler>,
     pub execution_profile: Arc<ExecutionProfile>,
     pub minimal_protocol_version: Option<ProtocolVersion>,
     pub node_localizer: Arc<dyn NodeLocalizer>,
@@ -45,7 +45,7 @@ pub struct SessionConfig {
     pub refresh_topology_interval: Option<Duration>,
     pub register_for_schema_event: bool,
     pub schema_agreement_interval: Duration,
-    pub session_event_handler: Option<Arc<dyn SessionEventHandler>>,
+    pub session_event_handler: Arc<dyn SessionEventHandler>,
     #[cfg(feature = "ssl")]
     pub ssl_context: Option<openssl::ssl::SslContext>,
     pub startup_options: HashMap<String, String>,
@@ -71,7 +71,7 @@ impl Default for SessionConfig {
             compression_minimal_size: 1 << 17,
             connection_local: ConnectionConfig::default(),
             connection_remote: ConnectionConfig::default(),
-            database_event_handler: None,
+            database_event_handler: Arc::new(NoopHandler),
             execution_profile: Default::default(),
             minimal_protocol_version: None,
             node_localizer: Arc::new(AllRemote),
@@ -81,7 +81,7 @@ impl Default for SessionConfig {
             refresh_topology_interval: None,
             register_for_schema_event: false,
             schema_agreement_interval: Duration::from_millis(200),
-            session_event_handler: None,
+            session_event_handler: Arc::new(NoopHandler),
             #[cfg(feature = "ssl")]
             ssl_context: None,
             startup_options,
@@ -187,7 +187,7 @@ impl SessionConfig {
     }
 
     pub fn database_event_handler(mut self, handler: impl DatabaseEventHandler + 'static) -> Self {
-        self.database_event_handler = Some(Arc::new(handler));
+        self.database_event_handler = Arc::new(handler);
         self
     }
 
@@ -289,7 +289,7 @@ impl SessionConfig {
     }
 
     pub fn session_event_handler(mut self, handler: impl SessionEventHandler + 'static) -> Self {
-        self.session_event_handler = Some(Arc::new(handler));
+        self.session_event_handler = Arc::new(handler);
         self
     }
 
