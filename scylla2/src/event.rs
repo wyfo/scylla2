@@ -59,6 +59,7 @@ pub trait SessionEventHandler: fmt::Debug + Send + Sync {
     fn schema_agreement(&self, schema_version: Uuid, rpc_address: IpAddr) {}
     fn topology_update(&self, topology: &Arc<Topology>) {}
     fn keyspace_used(&self, keyspace: &str) {}
+    fn reprepare_statement(&self, statement: &str, id: &[u8], node: &Arc<Node>) {}
 }
 
 impl SessionEventHandler for NoopHandler {}

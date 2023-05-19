@@ -253,6 +253,7 @@ impl Session {
             options.keyspace.as_deref(),
             options.custom_payload.as_ref(),
             profile,
+            self.0.session_event_handler.as_ref(),
         );
         let result = match (
             &profile.load_balancing_policy,

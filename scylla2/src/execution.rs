@@ -25,7 +25,7 @@ pub mod speculative;
 pub(crate) mod utils;
 
 pub use crate::execution::{profile::ExecutionProfile, result::ExecutionResult};
-use crate::{statement::Statement, utils::SharedIterator};
+use crate::{event::SessionEventHandler, statement::Statement, utils::SharedIterator};
 
 pub(crate) struct Execution<'a, S, V, R> {
     statement: &'a S,
@@ -33,6 +33,7 @@ pub(crate) struct Execution<'a, S, V, R> {
     keyspace: Option<&'a str>,
     custom_payload: Option<&'a HashMap<String, Vec<u8>>>,
     profile: &'a ExecutionProfile,
+    event_handler: &'a dyn SessionEventHandler,
     _phantom: PhantomData<V>,
 }
 
@@ -43,6 +44,7 @@ impl<'a, S, V, R> Execution<'a, S, V, R> {
         keyspace: Option<&'a str>,
         custom_payload: Option<&'a HashMap<String, Vec<u8>>>,
         profile: &'a ExecutionProfile,
+        event_handler: &'a dyn SessionEventHandler,
     ) -> Self {
         Self {
             statement,
@@ -50,6 +52,7 @@ impl<'a, S, V, R> Execution<'a, S, V, R> {
             keyspace,
             custom_payload,
             profile,
+            event_handler,
             _phantom: PhantomData,
         }
     }
@@ -144,16 +147,29 @@ where
                         let DatabaseErrorKind::Unprepared { statement_id } = &err.kind else { unreachable!() };
                         match self.statement.reprepare(statement_id) {
                             Some(statement) => {
+                                #[cfg(feature = "tracing")]
+                                {
+                                    let mut id = String::new();
+                                    for &b in statement_id.iter() {
+                                        use std::fmt::Write;
+                                        write!(&mut id, "{b:02X}").unwrap();
+                                    }
+                                    tracing::debug!(id, "Reprepare statement");
+                                }
                                 let prepare = Prepare {
                                     statement,
                                     keyspace: self.keyspace,
                                 };
-                                conn.send_queued(prepare, false, None).await?.ok()?
+                                conn.send_queued(prepare, false, None).await?.ok()?;
+                                self.event_handler.reprepare_statement(
+                                    statement,
+                                    statement_id,
+                                    node,
+                                );
+                                continue;
                             }
                             None => return Err(err.into()),
                         };
-                        retry_count -= 1;
-                        (RetryDecision::RetrySameNode(None), err.into())
                     }
                     Ok(Err(err)) => (retry(RetryableError::Database(&err)), err.into()),
                     Err(RequestError::Io(err)) => (retry(RetryableError::Io(&err)), err.into()),
