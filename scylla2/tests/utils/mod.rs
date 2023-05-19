@@ -5,8 +5,14 @@ use scylla2::{Session, SessionConfig};
 
 pub(crate) async fn test_session_internal(
     qualified_test_name: &str,
-    config: Option<SessionConfig>,
+    config: impl Into<Option<SessionConfig>>,
 ) -> Session {
+    tracing_subscriber::fmt::fmt()
+        .with_test_writer()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .compact()
+        .try_init()
+        .ok();
     let test_name = qualified_test_name.split("::").nth(1).unwrap();
     let keyspace = format!("test_{}", &test_name[..min(test_name.len(), 43)]);
     {
@@ -19,6 +25,7 @@ pub(crate) async fn test_session_internal(
     let scylla_uri =
         std::env::var("SCYLLA_URI").expect("SCYLLA_URI must be set for integration tests");
     let session = config
+        .into()
         .unwrap_or_default()
         .nodes([scylla_uri])
         .connect()
@@ -35,10 +42,10 @@ pub(crate) async fn test_session_internal(
 
 macro_rules! test_session {
     () => {
-        utils::test_session_internal(stdext::function_name!(), None).await
+        utils::test_session!(None)
     };
     ($builder:expr) => {
-        utils::test_session_internal(stdext::function_name!(), Some($builder)).await
+        utils::test_session_internal(stdext::function_name!(), $builder).await
     };
 }
 
