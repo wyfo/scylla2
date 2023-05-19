@@ -54,7 +54,7 @@ impl ControlConnection {
         Self {
             connection: Default::default(),
             stream_generator: Default::default(),
-            streams: Arc::new(Mutex::new(Some(StreamMap::default()))),
+            streams: Default::default(),
             session_event_handler,
         }
     }
@@ -126,6 +126,7 @@ impl ControlConnection {
             version,
             writer,
         });
+        self.streams.lock().unwrap().replace(Default::default());
         let event_handler = self.session_event_handler.clone();
         tokio::spawn(read_task(
             version,
