@@ -301,6 +301,12 @@ impl Session {
                     .await
                     .map_err(|_| ExecutionError::SchemaAgreementTimeout(event.clone()))?;
             }
+            (CqlResult::SetKeyspace(_), _) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(
+                    "Raw USE KEYSPACE query executed instead of using `Session::use_keyspace`"
+                );
+            }
             (CqlResult::Rows(rows), _) if rows.metadata.new_metadata_id.is_some() => {
                 // TODO maybe a add a config flag to decide if an error has to be
                 // raised here
