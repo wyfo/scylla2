@@ -6,6 +6,7 @@ pub use crate::{
     value::{
         convert::{AsValue, FromValue},
         iterator::{AsValueIter, FromValueIter},
+        Udt,
     },
     Consistency, ProtocolVersion, SerialConsistency,
 };

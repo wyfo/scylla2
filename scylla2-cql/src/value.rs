@@ -2,6 +2,7 @@ use std::{
     hash::Hash,
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    ops::{Deref, DerefMut},
     str,
 };
 
@@ -355,6 +356,28 @@ impl ReadValue<'_> for Uuid {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Udt<T>(pub T);
+
+impl<T> From<T> for Udt<T> {
+    fn from(value: T) -> Self {
+        Udt(value)
+    }
+}
+
+impl<T> Deref for Udt<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Udt<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 macro_rules! value_tuple {
     ($($tp:ident/$_:ident/$idx:tt),*;$len:literal) => {
         impl<$($tp,)*> WriteValue for ($($tp,)*)
@@ -375,7 +398,6 @@ macro_rules! value_tuple {
                 self.write_value_with_size_after(buf)
             }
         }
-
         impl<'a, $($tp,)*> ReadValue<'a> for ($($tp,)*)
         where
             $($tp: ReadValue<'a>,)*
@@ -388,12 +410,6 @@ macro_rules! value_tuple {
                         }
                         $($tp::check_type(&types[$idx])?;)*
                     }
-                    CqlType::Udt{fields, ..} => {
-                        if fields.len() != $len {
-                            return Err(format!("Unexpected UDT field count {}", fields.len()).into())
-                        }
-                        $($tp::check_type(&fields[$idx].1)?;)*
-                    }
                     tp => return Err(format!("Unexpected type {tp}").into()),
                 }
                 Ok(())
@@ -402,6 +418,54 @@ macro_rules! value_tuple {
             #[allow(unused_assignments, unused_mut, unused_variables)]
             fn read_value(mut slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
                 Ok(($($tp::read_value_with_size(&mut slice, envelope)?,)*))
+            }
+        }
+
+        impl<$($tp,)*> WriteValue for Udt<($($tp,)*)>
+        where
+            $($tp: WriteValue,)*
+        {
+            fn value_size(&self) -> Result<usize, ValueTooBig> {
+                self.0.value_size()
+            }
+
+            fn write_value(&self, buf: &mut &mut [u8]) {
+                self.0.write_value(buf);
+            }
+
+            fn write_value_with_size(&self, buf: &mut &mut [u8]) {
+                self.0.write_value_with_size(buf)
+            }
+        }
+
+        impl<'a, $($tp,)*> ReadValue<'a> for Udt<($($tp,)*)>
+        where
+            $($tp: ReadValue<'a> + Default,)*
+        {
+            #[allow(unused_assignments, unused_mut, unused_variables)]
+            fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
+                match cql_type {
+                    CqlType::Udt{fields, ..} => {
+                        $(if $idx < fields.len() {
+                            $tp::check_type(&fields[$idx].1)?;
+                        } else {
+                            return Ok(());
+                        })*
+                    }
+                    tp => return Err(format!("Unexpected type {tp}").into()),
+                }
+                Ok(())
+            }
+
+            #[allow(unused_assignments, unused_mut, unused_variables)]
+            fn read_value(mut slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
+                Ok((
+                    $(if !slice.is_empty() {
+                        $tp::read_value_with_size(&mut slice, envelope)?
+                    } else {
+                        Default::default()
+                    },)*
+                ).into())
             }
         }
     };

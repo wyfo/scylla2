@@ -12,7 +12,7 @@ use crate::{
     cql_type::CqlType,
     error::BoxedError,
     utils::tuples,
-    value::{MaybeValue, ReadValue, WriteValue},
+    value::{MaybeValue, ReadValue, Udt, WriteValue},
 };
 
 pub trait AsValue {
@@ -108,7 +108,6 @@ macro_rules! as_from_value {
                 self
             }
         }
-
         impl<'a> FromValue<'a> for $tp {
             type Value = Self;
 
@@ -135,7 +134,6 @@ macro_rules! value_tuple {
                 ($(self.$idx.as_value(),)*)
             }
         }
-
         #[allow(unused_variables)]
         impl<'a, $($tp,)*> FromValue<'a> for ($($tp,)*)
         where
@@ -147,10 +145,41 @@ macro_rules! value_tuple {
                 Ok(($($tp::from_value(value.$idx)?,)*))
             }
         }
+
+        impl<$($tp,)*> AsValue for Udt<($($tp,)*)>
+        where
+            $($tp: AsValue,)*
+        {
+            type Value<'a> = Udt<($($tp::Value<'a>,)*)> where $($tp: 'a),*;
+
+            #[allow(clippy::unused_unit)]
+            fn as_value(&self) -> Self::Value<'_> {
+                self.0.as_value().into()
+            }
+        }
+        #[allow(unused_variables)]
+        impl<'a, $($tp,)*> FromValue<'a> for Udt<($($tp,)*)>
+        where
+            $($tp: FromValue<'a>, $tp::Value: Default,)*
+        {
+            type Value = Udt<($($tp::Value,)*)>;
+
+            fn from_value(value: Self::Value) -> Result<Self, BoxedError> {
+                Ok(<($($tp,)*)>::from_value(value.0)?.into())
+            }
+        }
     };
 }
 tuples!(value_tuple);
 
+#[cfg(feature = "string")]
+impl AsValue for string::String<Bytes> {
+    type Value<'a> = &'a str where Self: 'a;
+
+    fn as_value(&self) -> Self::Value<'_> {
+        self
+    }
+}
 #[cfg(feature = "string")]
 impl<'a> FromValue<'a> for string::String<Bytes> {
     type Value = Bytes;
@@ -196,7 +225,6 @@ impl AsValue for chrono::NaiveDate {
             .num_days() as u32
     }
 }
-
 #[cfg(feature = "chrono")]
 impl<'a> FromValue<'a> for chrono::NaiveDate {
     type Value = u32;
@@ -227,7 +255,6 @@ where
         self.timestamp_millis()
     }
 }
-
 #[cfg(feature = "chrono")]
 impl<'a> FromValue<'a> for chrono::DateTime<chrono::Utc> {
     type Value = i64;
@@ -250,7 +277,6 @@ impl AsValue for chrono::Duration {
         self.num_nanoseconds().expect("nanoseconds overflow")
     }
 }
-
 #[cfg(feature = "chrono")]
 impl<'a> FromValue<'a> for chrono::Duration {
     type Value = i64;
