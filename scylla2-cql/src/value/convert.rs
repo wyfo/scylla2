@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     cql_type::CqlType,
-    error::{BoxedError, TypeError},
+    error::BoxedError,
     utils::tuples,
     value::{MaybeValue, ReadValue, WriteValue},
 };
@@ -24,7 +24,7 @@ pub trait AsValue {
 
 pub trait FromValue<'a>: Sized {
     type Value: ReadValue<'a>;
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         Self::Value::check_type(cql_type)
     }
     fn from_value(value: Self::Value) -> Result<Self, BoxedError>;
@@ -89,7 +89,7 @@ where
 {
     type Value = Option<T::Value>;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         T::check_type(cql_type)
     }
 
@@ -155,7 +155,7 @@ tuples!(value_tuple);
 impl<'a> FromValue<'a> for string::String<Bytes> {
     type Value = Bytes;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         <&str as ReadValue>::check_type(cql_type)
     }
 
@@ -201,7 +201,7 @@ impl AsValue for chrono::NaiveDate {
 impl<'a> FromValue<'a> for chrono::NaiveDate {
     type Value = u32;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         crate::value::check_type!(cql_type, CqlType::Date)
     }
 
@@ -232,7 +232,7 @@ where
 impl<'a> FromValue<'a> for chrono::DateTime<chrono::Utc> {
     type Value = i64;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         crate::value::check_type!(cql_type, CqlType::Timestamp)
     }
 
@@ -255,7 +255,7 @@ impl AsValue for chrono::Duration {
 impl<'a> FromValue<'a> for chrono::Duration {
     type Value = i64;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         crate::value::check_type!(cql_type, CqlType::Time)
     }
 

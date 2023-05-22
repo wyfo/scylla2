@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     cql::{ReadCql, WriteCql},
     cql_type::CqlType,
-    error::{NullError, ParseError, TypeError, ValueTooBig},
+    error::{BoxedError, NullError, ParseError, ValueTooBig},
     utils::{invalid_data, tuples},
 };
 
@@ -58,7 +58,7 @@ pub(crate) trait WriteValueExt: WriteValue {
 impl<T> WriteValueExt for T where T: WriteValue {}
 
 pub trait ReadValue<'a>: Sized {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError>;
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError>;
     fn read_value(slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError>;
     fn null() -> Result<Self, ParseError> {
         Err(NullError.into())
@@ -78,7 +78,7 @@ macro_rules! check_type {
     ($cql_tp:ident, $pat:pat) => {
         match $cql_tp {
             $pat => Ok(()),
-            _ => Err($crate::error::TypeError),
+            tp => Err(format!("Unexpected type {tp}").into()),
         }
     };
 }
@@ -97,7 +97,7 @@ macro_rules! number_value {
         }
 
         impl<'a> ReadValue<'a> for $tp {
-            fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+            fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
                 check_type!(cql_type, $pat)
             }
 
@@ -137,7 +137,7 @@ impl WriteValue for num_bigint::BigInt {
 }
 #[cfg(feature = "num-bigint")]
 impl<'a> ReadValue<'a> for num_bigint::BigInt {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::BigInt)
     }
 
@@ -174,7 +174,7 @@ impl WriteValue for bigdecimal::BigDecimal {
 
 #[cfg(feature = "bigdecimal")]
 impl<'a> ReadValue<'a> for bigdecimal::BigDecimal {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Decimal)
     }
 
@@ -199,7 +199,7 @@ impl WriteValue for &[u8] {
     }
 }
 impl<'a> ReadValue<'a> for &'a [u8] {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Ascii | CqlType::Blob | CqlType::Text)
     }
 
@@ -218,7 +218,7 @@ impl WriteValue for Bytes {
     }
 }
 impl<'a> ReadValue<'a> for Bytes {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Ascii | CqlType::Blob | CqlType::Text)
     }
 
@@ -237,7 +237,7 @@ impl WriteValue for bool {
     }
 }
 impl ReadValue<'_> for bool {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Boolean)
     }
 
@@ -256,7 +256,7 @@ impl WriteValue for Ipv4Addr {
     }
 }
 impl ReadValue<'_> for Ipv4Addr {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Inet)
     }
 
@@ -277,7 +277,7 @@ impl WriteValue for Ipv6Addr {
     }
 }
 impl ReadValue<'_> for Ipv6Addr {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Inet)
     }
 
@@ -304,7 +304,7 @@ impl WriteValue for IpAddr {
     }
 }
 impl ReadValue<'_> for IpAddr {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Inet)
     }
 
@@ -327,7 +327,7 @@ impl WriteValue for &str {
     }
 }
 impl<'a> ReadValue<'a> for &'a str {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Ascii | CqlType::Text)
     }
 
@@ -346,7 +346,7 @@ impl WriteValue for Uuid {
     }
 }
 impl ReadValue<'_> for Uuid {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         check_type!(cql_type, CqlType::Uuid | CqlType::Timeuuid)
     }
 
@@ -380,21 +380,21 @@ macro_rules! value_tuple {
         where
             $($tp: ReadValue<'a>,)*
         {
-            fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+            fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
                 match cql_type {
                     CqlType::Tuple(types) => {
                         if types.len() != $len {
-                            return Err(TypeError)
+                            return Err(format!("Unexpected tuple length {}", types.len()).into())
                         }
                         $($tp::check_type(&types[$idx])?;)*
                     }
                     CqlType::Udt{fields, ..} => {
                         if fields.len() != $len {
-                            return Err(TypeError)
+                            return Err(format!("Unexpected UDT field count {}", fields.len()).into())
                         }
                         $($tp::check_type(&fields[$idx].1)?;)*
                     }
-                    _ => return Err(TypeError),
+                    tp => return Err(format!("Unexpected type {tp}").into()),
                 }
                 Ok(())
             }
@@ -451,7 +451,7 @@ impl<'a, T> ReadValue<'a> for Option<T>
 where
     T: ReadValue<'a>,
 {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         T::check_type(cql_type)
     }
 

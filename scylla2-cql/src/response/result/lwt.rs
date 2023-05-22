@@ -2,7 +2,7 @@ use bytes::Bytes;
 
 use crate::{
     cql_type::CqlType,
-    error::{ParseError, TypeError},
+    error::{BoxedError, ParseError},
     response::result::{column_spec::ColumnSpec, rows::Row},
     value::ReadValueExt,
 };
@@ -11,14 +11,14 @@ use crate::{
 pub struct LwtApplied(pub bool);
 
 impl<'a> Row<'a> for LwtApplied {
-    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
+    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
         match column_specs.first() {
             Some(ColumnSpec {
                 r#type: CqlType::Boolean,
                 name,
                 ..
             }) if name.as_str() == "[applied]" => Ok(()),
-            _ => Err(TypeError),
+            _ => Err("No column [applied]".into()),
         }
     }
 

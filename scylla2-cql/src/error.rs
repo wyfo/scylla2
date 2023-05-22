@@ -16,10 +16,6 @@ pub struct ValueTooBig(pub usize);
 pub struct FrameTooBig(pub usize);
 
 #[derive(Debug, thiserror::Error)]
-#[error("Unexpected type")]
-pub struct TypeError;
-
-#[derive(Debug, thiserror::Error)]
 #[error("Unexpected null value")]
 pub struct NullError;
 

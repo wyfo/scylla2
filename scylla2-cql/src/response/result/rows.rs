@@ -5,7 +5,7 @@ use enumflags2::{bitflags, BitFlags};
 
 use crate::{
     cql::ReadCql,
-    error::{BoxedError, ParseError, TypeError},
+    error::{BoxedError, ParseError},
     extensions::ProtocolExtensions,
     response::result::column_spec::{deserialize_column_specs, ColumnSpec},
     utils::{invalid_data, tuples},
@@ -47,7 +47,7 @@ impl Rows {
     pub fn parse<'a, R>(
         &'a self,
         column_specs: Option<&'a [ColumnSpec]>,
-    ) -> Option<Result<RowIterator<'a, R>, TypeError>>
+    ) -> Option<Result<RowIterator<'a, R>, BoxedError>>
     where
         R: Row<'a>,
     {
@@ -135,7 +135,7 @@ impl Metadata {
 }
 
 pub trait Row<'a>: Sized {
-    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError>;
+    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError>;
     fn parse_row(
         col_specs: &[ColumnSpec],
         envelope: &'a Bytes,
@@ -149,11 +149,11 @@ macro_rules! tuple_row {
         where
             $($tp: FromValue<'a>,)*
         {
-            fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
+            fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
                 if column_specs.len() != $len {
-                    return Err(TypeError);
+                    return Err(format!("Unexpected column count {}", column_specs.len()).into());
                 }
-                $($tp::check_type(&column_specs[$idx].r#type)?;)*
+                $($tp::check_type(&column_specs[$idx].r#type).map_err(|err| format!("Column {}: {err}", $idx))?;)*
                 Ok(())
             }
 
@@ -212,7 +212,7 @@ impl<'a, R> FusedIterator for RowIterator<'a, R> where R: Row<'a> {}
 
 pub trait FromRow<'a>: Sized {
     type Row: Row<'a>;
-    fn check_column_specs(_column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
+    fn check_column_specs(_column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
         Ok(())
     }
     fn from_row(value: Self::Row) -> Result<Self, BoxedError>;
@@ -222,7 +222,7 @@ impl<'a, T> Row<'a> for T
 where
     T: FromRow<'a>,
 {
-    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
+    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
         T::Row::check_column_specs(column_specs)?;
         <T as FromRow>::check_column_specs(column_specs)
     }

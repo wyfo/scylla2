@@ -14,7 +14,7 @@ use bytes::Bytes;
 use crate::{
     cql::{ReadCql, WriteCql},
     cql_type::CqlType,
-    error::{BoxedError, ParseError, TypeError, ValueTooBig},
+    error::{BoxedError, ParseError, ValueTooBig},
     utils::invalid_data,
     value::{
         convert::{AsValue, FromValue},
@@ -29,7 +29,7 @@ pub trait WriteCollectionValue {
 
 pub trait ReadCollectionValue<'a> {
     type Unpacked;
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError>;
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError>;
     fn read_col_value(
         buf: &mut &'a [u8],
         envelope: &'a Bytes,
@@ -55,11 +55,11 @@ where
 {
     type Unpacked = T;
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         match cql_type {
             CqlType::List(inner) => T::check_type(inner),
             CqlType::Set(inner) => T::check_type(inner),
-            _ => Err(TypeError),
+            tp => Err(format!("Unexpected type {tp}").into()),
         }
     }
 
@@ -93,14 +93,14 @@ where
 {
     type Unpacked = (K, V);
 
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         match cql_type {
             CqlType::Map(key, value) => {
                 K::check_type(key)?;
                 V::check_type(value)?;
                 Ok(())
             }
-            _ => Err(TypeError),
+            tp => Err(format!("Unexpected type {tp}").into()),
         }
     }
 
@@ -151,7 +151,7 @@ impl<'a, T> ReadValue<'a> for ReadValueIter<'a, T>
 where
     T: ReadCollectionValue<'a>,
 {
-    fn check_type(cql_type: &CqlType) -> Result<(), TypeError> {
+    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
         T::check_type(cql_type)
     }
 

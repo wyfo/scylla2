@@ -110,11 +110,11 @@ impl ExecutionResult {
     where
         R: Row<'a>,
     {
-        Ok(self
-            .as_rows()
+        self.as_rows()
             .ok_or(RowsError::NoRows)?
             .parse(self.column_specs.as_deref())
-            .ok_or(RowsError::NoMetadata)??)
+            .ok_or(RowsError::NoMetadata)?
+            .map_err(RowsError::TypeError)
     }
 
     pub fn lwt_applied(&self) -> Result<bool, LwtAppliedError> {

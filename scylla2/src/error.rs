@@ -127,7 +127,7 @@ pub struct Disconnected;
 #[derive(Debug, thiserror::Error)]
 pub enum RowsError {
     #[error(transparent)]
-    TypeError(#[from] TypeError),
+    TypeError(BoxedError),
     #[error("No rows")]
     NoRows,
     #[error("No metadata")]
