@@ -9,7 +9,7 @@ use crate::{
     cql::ReadCql,
     cql_type::CqlType,
     error::{ParseError, TypeError, ValueTooBig},
-    response::result::{column_spec::ColumnSpec, rows::RowParser},
+    response::result::{column_spec::ColumnSpec, rows::Row},
     utils::invalid_data,
     value::{convert::AsValue, iterator::WriteValueIter, ReadValue, WriteValue, WriteValueExt},
 };
@@ -163,7 +163,7 @@ impl CqlValue {
     }
 }
 
-impl<'a> RowParser<'a> for Vec<Option<CqlValue>> {
+impl<'a> Row<'a> for Vec<Option<CqlValue>> {
     fn check_column_specs(_column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
         Ok(())
     }

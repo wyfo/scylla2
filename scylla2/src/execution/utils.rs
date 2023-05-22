@@ -4,7 +4,7 @@ use scylla2_cql::{
     request::query::{parameters::QueryParameters, Query as CqlQuery},
     response::{
         result::{
-            rows::{RowParser, Rows},
+            rows::{Row, Rows},
             CqlResult,
         },
         Response, ResponseBody,
@@ -20,9 +20,9 @@ pub(crate) fn cql_query<V>(query: &str, values: V) -> CqlQuery<V> {
     }
 }
 
-fn row_iterator<'a, P>(rows: &'a Rows) -> io::Result<impl Iterator<Item = io::Result<P>> + 'a>
+fn row_iterator<'a, R>(rows: &'a Rows) -> io::Result<impl Iterator<Item = io::Result<R>> + 'a>
 where
-    P: RowParser<'a> + 'a,
+    R: Row<'a> + 'a,
 {
     Ok(rows
         .parse(None)
@@ -31,10 +31,10 @@ where
         .map(|row| row.map_err(other_error)))
 }
 
-pub(crate) fn cql_rows<P, T, B>(response: Response, map: impl (Fn(P) -> T) + Clone) -> io::Result<B>
+pub(crate) fn cql_rows<R, T, B>(response: Response, map: impl (Fn(R) -> T) + Clone) -> io::Result<B>
 where
     B: FromIterator<T>,
-    P: for<'a> RowParser<'a>,
+    R: for<'a> Row<'a>,
 {
     match response.body {
         ResponseBody::Result(CqlResult::Rows(rows)) => row_iterator(&rows)?
@@ -44,9 +44,9 @@ where
     }
 }
 
-pub(crate) fn maybe_cql_row<P>(response: Response) -> io::Result<Option<P>>
+pub(crate) fn maybe_cql_row<R>(response: Response) -> io::Result<Option<R>>
 where
-    P: for<'a> RowParser<'a>,
+    R: for<'a> Row<'a>,
 {
     match response.body {
         ResponseBody::Result(CqlResult::Rows(rows)) => {
@@ -61,14 +61,14 @@ where
     }
 }
 
-pub(crate) fn peers_and_local<P, T, B>(
+pub(crate) fn peers_and_local<R, T, B>(
     peers: Response,
     local: Response,
-    map: impl (Fn(P) -> T) + Clone,
+    map: impl (Fn(R) -> T) + Clone,
 ) -> io::Result<B>
 where
     B: FromIterator<T> + Extend<T>,
-    P: for<'a> RowParser<'a>,
+    R: for<'a> Row<'a>,
 {
     let mut container: B = cql_rows(peers, map.clone())?;
     container.extend(maybe_cql_row(local)?.map(map));

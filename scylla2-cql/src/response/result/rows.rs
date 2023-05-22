@@ -44,15 +44,15 @@ impl Rows {
         &self.envelope[self.rows_offset..]
     }
 
-    pub fn parse<'a, P>(
+    pub fn parse<'a, R>(
         &'a self,
         column_specs: Option<&'a [ColumnSpec]>,
-    ) -> Option<Result<RowIterator<'a, P>, TypeError>>
+    ) -> Option<Result<RowIterator<'a, R>, TypeError>>
     where
-        P: RowParser<'a>,
+        R: Row<'a>,
     {
         let column_specs = column_specs.or(self.metadata.column_specs.as_deref())?;
-        if let Err(err) = P::check_column_specs(column_specs) {
+        if let Err(err) = R::check_column_specs(column_specs) {
             return Some(Err(err));
         }
         Some(Ok(RowIterator {
@@ -134,7 +134,7 @@ impl Metadata {
     }
 }
 
-pub trait RowParser<'a>: Sized {
+pub trait Row<'a>: Sized {
     fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError>;
     fn parse_row(
         col_specs: &[ColumnSpec],
@@ -145,7 +145,7 @@ pub trait RowParser<'a>: Sized {
 
 macro_rules! tuple_row {
     ($($tp:ident/$_:ident/$idx:tt),*;$len:literal) => {
-        impl<'a, $($tp,)*> RowParser<'a> for ($($tp,)*)
+        impl<'a, $($tp,)*> Row<'a> for ($($tp,)*)
         where
             $($tp: FromValue<'a>,)*
         {
@@ -172,19 +172,19 @@ macro_rules! tuple_row {
 tuples!(tuple_row);
 
 #[derive(Debug, Clone)]
-pub struct RowIterator<'a, P> {
+pub struct RowIterator<'a, R> {
     pub envelope: &'a Bytes,
     pub column_specs: &'a [ColumnSpec],
     pub rows_count: usize,
     pub bytes: &'a [u8],
-    pub _phantom: PhantomData<P>,
+    pub _phantom: PhantomData<R>,
 }
 
-impl<'a, P> Iterator for RowIterator<'a, P>
+impl<'a, R> Iterator for RowIterator<'a, R>
 where
-    P: RowParser<'a>,
+    R: Row<'a>,
 {
-    type Item = Result<P, ParseError>;
+    type Item = Result<R, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.rows_count == 0 {
@@ -194,7 +194,7 @@ where
             return None;
         }
         self.rows_count -= 1;
-        Some(P::parse_row(
+        Some(R::parse_row(
             self.column_specs,
             self.envelope,
             &mut self.bytes,
@@ -206,19 +206,19 @@ where
     }
 }
 
-impl<'a, P> ExactSizeIterator for RowIterator<'a, P> where P: RowParser<'a> {}
+impl<'a, R> ExactSizeIterator for RowIterator<'a, R> where R: Row<'a> {}
 
-impl<'a, P> FusedIterator for RowIterator<'a, P> where P: RowParser<'a> {}
+impl<'a, R> FusedIterator for RowIterator<'a, R> where R: Row<'a> {}
 
 pub trait FromRow<'a>: Sized {
-    type Row: RowParser<'a>;
+    type Row: Row<'a>;
     fn check_column_specs(_column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
         Ok(())
     }
     fn from_row(value: Self::Row) -> Result<Self, BoxedError>;
 }
 
-impl<'a, T> RowParser<'a> for T
+impl<'a, T> Row<'a> for T
 where
     T: FromRow<'a>,
 {

@@ -3,14 +3,14 @@ use bytes::Bytes;
 use crate::{
     cql_type::CqlType,
     error::{ParseError, TypeError},
-    response::result::{column_spec::ColumnSpec, rows::RowParser},
+    response::result::{column_spec::ColumnSpec, rows::Row},
     value::ReadValueExt,
 };
 
 #[derive(Debug)]
 pub struct LwtApplied(pub bool);
 
-impl<'a> RowParser<'a> for LwtApplied {
+impl<'a> Row<'a> for LwtApplied {
     fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), TypeError> {
         match column_specs.first() {
             Some(ColumnSpec {

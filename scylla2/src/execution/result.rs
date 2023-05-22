@@ -1,11 +1,11 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use scylla2_cql::{
     response::{
         result::{
             column_spec::ColumnSpec,
             lwt::LwtApplied,
-            rows::{PagingState, RowIterator, RowParser, Rows},
+            rows::{PagingState, Row, RowIterator, Rows},
             CqlResult,
         },
         Response, ResponseBody,
@@ -106,14 +106,14 @@ impl ExecutionResult {
             .or_else(|| self.as_rows()?.metadata.column_specs.as_ref())
     }
 
-    pub fn rows<'a, P>(&'a self) -> Result<RowIterator<'a, P>, RowsError>
+    pub fn rows<'a, R>(&'a self) -> Result<RowIterator<'a, R>, RowsError>
     where
-        P: RowParser<'a>,
+        R: Row<'a>,
     {
         Ok(self
             .as_rows()
             .ok_or(RowsError::NoRows)?
-            .parse(self.column_specs().map(Deref::deref))
+            .parse(self.column_specs.as_deref())
             .ok_or(RowsError::NoMetadata)??)
     }
 
