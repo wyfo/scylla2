@@ -157,7 +157,11 @@ impl CqlValue {
     ) -> Result<Vec<(String, Option<CqlValue>)>, ParseError> {
         let mut vec = Vec::with_capacity(fields.len());
         for (name, tp) in fields {
-            vec.push((name.into(), Self::parse(tp, &mut slice)?));
+            if !slice.is_empty() {
+                vec.push((name.into(), Self::parse(tp, &mut slice)?));
+            } else {
+                vec.push((name.into(), None));
+            }
         }
         Ok(vec)
     }
