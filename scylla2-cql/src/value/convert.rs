@@ -160,7 +160,7 @@ macro_rules! value_tuple {
         #[allow(unused_variables)]
         impl<'a, $($tp,)*> FromValue<'a> for Udt<($($tp,)*)>
         where
-            $($tp: FromValue<'a>, $tp::Value: Default,)*
+            $($tp: FromValue<'a>,)*
         {
             type Value = Udt<($($tp::Value,)*)>;
 

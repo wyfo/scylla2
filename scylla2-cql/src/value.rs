@@ -440,7 +440,7 @@ macro_rules! value_tuple {
 
         impl<'a, $($tp,)*> ReadValue<'a> for Udt<($($tp,)*)>
         where
-            $($tp: ReadValue<'a> + Default,)*
+            $($tp: ReadValue<'a>,)*
         {
             #[allow(unused_assignments, unused_mut, unused_variables)]
             fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
@@ -463,7 +463,7 @@ macro_rules! value_tuple {
                     $(if !slice.is_empty() {
                         $tp::read_value_with_size(&mut slice, envelope)?
                     } else {
-                        Default::default()
+                        $tp::null()?
                     },)*
                 ).into())
             }
