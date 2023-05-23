@@ -25,7 +25,7 @@ impl Default for ExecutionProfile {
         Self {
             consistency: Default::default(),
             serial_consistency: Default::default(),
-            request_timeout: Default::default(),
+            request_timeout: Some(Duration::from_secs(30)),
             tracing: Default::default(),
             load_balancing_policy: Default::default(),
             retry_policy: Arc::new(DefaultRetryPolicy),
