@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{fmt, io, sync::Arc};
 
 use crate::{
     cql::ReadCql,
@@ -16,6 +16,7 @@ pub enum CqlType {
     Counter,
     Decimal,
     Double,
+    // TODO add duration
     Float,
     Int,
     Timestamp,
@@ -33,8 +34,8 @@ pub enum CqlType {
     Map(Box<CqlType>, Box<CqlType>),
     Set(Box<CqlType>),
     Udt {
-        keyspace: String,
-        type_name: String,
+        keyspace: Arc<str>,
+        type_name: Arc<str>,
         fields: Vec<(String, CqlType)>,
     },
 }
@@ -69,8 +70,8 @@ impl CqlType {
             ),
             0x0022 => CqlType::Set(Box::new(CqlType::deserialize(buf)?)),
             0x0030 => CqlType::Udt {
-                keyspace: String::read_cql(buf)?,
-                type_name: String::read_cql(buf)?,
+                keyspace: <&str>::read_cql(buf)?.into(),
+                type_name: <&str>::read_cql(buf)?.into(),
                 fields: {
                     let mut vec = Vec::with_capacity(u16::read_cql(buf)? as usize);
                     for _ in 0..vec.capacity() {

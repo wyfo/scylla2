@@ -1,10 +1,10 @@
-use bytes::Bytes;
-
 use crate::{
     cql_type::CqlType,
     error::{BoxedError, ParseError},
-    response::result::{column_spec::ColumnSpec, rows::Row},
-    value::ReadValueExt,
+    response::result::{
+        column_spec::ColumnSpec,
+        rows::{Row, RowsSlice},
+    },
 };
 
 #[derive(Debug)]
@@ -22,14 +22,10 @@ impl<'a> Row<'a> for LwtApplied {
         }
     }
 
-    fn parse_row(
-        col_specs: &[ColumnSpec],
-        envelope: &'a Bytes,
-        bytes: &mut &'a [u8],
-    ) -> Result<Self, ParseError> {
-        let applied = bool::read_value_with_size(bytes, envelope)?;
+    fn parse_row(col_specs: &[ColumnSpec], slice: &mut RowsSlice<'a>) -> Result<Self, ParseError> {
+        let applied = slice.parse_value()?;
         for _ in 1..col_specs.len() {
-            Option::<&[u8]>::read_value_with_size(bytes, envelope)?;
+            slice.parse_value_slice()?;
         }
         Ok(LwtApplied(applied))
     }

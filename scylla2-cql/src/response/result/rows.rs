@@ -1,4 +1,10 @@
-use std::{io, iter::FusedIterator, marker::PhantomData, sync::Arc};
+use std::{
+    io,
+    iter::FusedIterator,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use enumflags2::{bitflags, BitFlags};
@@ -8,8 +14,8 @@ use crate::{
     error::{BoxedError, ParseError},
     extensions::ProtocolExtensions,
     response::result::column_spec::{deserialize_column_specs, ColumnSpec},
-    utils::{invalid_data, tuples},
-    value::{convert::FromValue, ReadValueExt},
+    utils::tuples,
+    value::{convert::FromValue, ReadValue},
     ProtocolVersion,
 };
 
@@ -40,8 +46,11 @@ impl Rows {
         })
     }
 
-    pub fn rows_slice(&self) -> &[u8] {
-        &self.envelope[self.rows_offset..]
+    pub fn slice(&self) -> RowsSlice {
+        RowsSlice {
+            bytes: &self.envelope,
+            slice: &self.envelope[self.rows_offset..],
+        }
     }
 
     pub fn parse<'a, R>(
@@ -56,10 +65,9 @@ impl Rows {
             return Some(Err(err));
         }
         Some(Ok(RowIterator {
-            envelope: &self.envelope,
+            slice: self.slice(),
             column_specs,
             rows_count: self.rows_count,
-            bytes: self.rows_slice(),
             _phantom: PhantomData,
         }))
     }
@@ -134,13 +142,50 @@ impl Metadata {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct RowsSlice<'a> {
+    bytes: &'a Bytes,
+    slice: &'a [u8],
+}
+
+impl<'a> RowsSlice<'a> {
+    pub fn slice(self) -> &'a [u8] {
+        self.slice
+    }
+
+    pub fn bytes(self) -> Bytes {
+        self.bytes.slice_ref(self.slice)
+    }
+
+    pub fn parse_value_slice(&mut self) -> Result<Option<RowsSlice<'a>>, ParseError> {
+        Ok(Option::read_cql(&mut self.slice)?.map(|slice| Self {
+            bytes: self.bytes,
+            slice,
+        }))
+    }
+
+    pub fn parse_value<V: ReadValue<'a>>(&mut self) -> Result<V, ParseError> {
+        self.parse_value_slice()?
+            .map_or_else(V::null, V::read_value)
+    }
+}
+
+impl<'a> Deref for RowsSlice<'a> {
+    type Target = &'a [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.slice
+    }
+}
+
+impl<'a> DerefMut for RowsSlice<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slice
+    }
+}
+
 pub trait Row<'a>: Sized {
     fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError>;
-    fn parse_row(
-        col_specs: &[ColumnSpec],
-        envelope: &'a Bytes,
-        bytes: &mut &'a [u8],
-    ) -> Result<Self, ParseError>;
+    fn parse_row(col_specs: &[ColumnSpec], slice: &mut RowsSlice<'a>) -> Result<Self, ParseError>;
 }
 
 macro_rules! tuple_row {
@@ -160,10 +205,9 @@ macro_rules! tuple_row {
             #[allow(unused_variables)]
             fn parse_row(
                 _column_specs: &[ColumnSpec],
-                envelope: &'a Bytes,
-                bytes: &mut &'a [u8],
+                slice: &mut RowsSlice<'a>,
             ) -> Result<Self, ParseError> {
-                Ok(($($tp::from_value($tp::Value::read_value_with_size(bytes, envelope)?)?,)*))
+                Ok(($($tp::from_value(slice.parse_value()?)?,)*))
             }
         }
     };
@@ -173,10 +217,9 @@ tuples!(tuple_row);
 
 #[derive(Debug, Clone)]
 pub struct RowIterator<'a, R> {
-    pub envelope: &'a Bytes,
+    pub slice: RowsSlice<'a>,
     pub column_specs: &'a [ColumnSpec],
     pub rows_count: usize,
-    pub bytes: &'a [u8],
     pub _phantom: PhantomData<R>,
 }
 
@@ -188,17 +231,10 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.rows_count == 0 {
-            if !self.bytes.is_empty() {
-                return Some(Err(invalid_data("Unexpected remaining bytes").into()));
-            }
             return None;
         }
         self.rows_count -= 1;
-        Some(R::parse_row(
-            self.column_specs,
-            self.envelope,
-            &mut self.bytes,
-        ))
+        Some(R::parse_row(self.column_specs, &mut self.slice))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -212,8 +248,8 @@ impl<'a, R> FusedIterator for RowIterator<'a, R> where R: Row<'a> {}
 
 pub trait FromRow<'a>: Sized {
     type Row: Row<'a>;
-    fn check_column_specs(_column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
-        Ok(())
+    fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
+        Self::Row::check_column_specs(column_specs)
     }
     fn from_row(value: Self::Row) -> Result<Self, BoxedError>;
 }
@@ -223,15 +259,10 @@ where
     T: FromRow<'a>,
 {
     fn check_column_specs(column_specs: &[ColumnSpec]) -> Result<(), BoxedError> {
-        T::Row::check_column_specs(column_specs)?;
         <T as FromRow>::check_column_specs(column_specs)
     }
 
-    fn parse_row(
-        col_specs: &[ColumnSpec],
-        envelope: &'a Bytes,
-        bytes: &mut &'a [u8],
-    ) -> Result<Self, ParseError> {
-        Ok(T::from_row(T::Row::parse_row(col_specs, envelope, bytes)?)?)
+    fn parse_row(col_specs: &[ColumnSpec], slice: &mut RowsSlice<'a>) -> Result<Self, ParseError> {
+        Ok(T::from_row(T::Row::parse_row(col_specs, slice)?)?)
     }
 }

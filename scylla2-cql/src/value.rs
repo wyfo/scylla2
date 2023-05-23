@@ -10,9 +10,10 @@ use bytes::{BufMut, Bytes};
 use uuid::Uuid;
 
 use crate::{
-    cql::{ReadCql, WriteCql},
+    cql::WriteCql,
     cql_type::CqlType,
     error::{BoxedError, NullError, ParseError, ValueTooBig},
+    response::result::rows::RowsSlice,
     utils::{invalid_data, tuples},
 };
 
@@ -45,35 +46,17 @@ pub(crate) trait WriteValueExt: WriteValue {
     fn value_size_with_size(&self) -> Result<usize, ValueTooBig> {
         Ok(0i32.cql_size()? + self.value_size()?)
     }
-
-    fn write_value_with_size_after(&self, buf: &mut &mut [u8]) {
-        // Lifetime dance taken from `impl Write for &mut [u8]`.
-        let (len_slice, buf_slice) = mem::take(buf).split_at_mut(4);
-        *buf = buf_slice;
-        let buf_len = buf.len();
-        self.write_value(buf);
-        len_slice.copy_from_slice(&((buf_len - buf.len()) as u32).to_be_bytes());
-    }
 }
 
 impl<T> WriteValueExt for T where T: WriteValue {}
 
 pub trait ReadValue<'a>: Sized {
     fn check_type(cql_type: &CqlType) -> Result<(), BoxedError>;
-    fn read_value(slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError>;
+    fn read_value(slice: RowsSlice<'a>) -> Result<Self, ParseError>;
     fn null() -> Result<Self, ParseError> {
         Err(NullError.into())
     }
 }
-
-pub(crate) trait ReadValueExt<'a>: ReadValue<'a> {
-    fn read_value_with_size(buf: &mut &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Option::<&[u8]>::read_cql(buf)?
-            .map_or_else(Self::null, |slice| Self::read_value(slice, envelope))
-    }
-}
-
-impl<'a, T> ReadValueExt<'a> for T where T: ReadValue<'a> {}
 
 macro_rules! check_type {
     ($cql_tp:ident, $pat:pat) => {
@@ -97,14 +80,14 @@ macro_rules! number_value {
             }
         }
 
-        impl<'a> ReadValue<'a> for $tp {
+        impl ReadValue<'_> for $tp {
             fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
                 check_type!(cql_type, $pat)
             }
 
-            fn read_value(slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
+            fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
                 Ok(<$tp>::from_be_bytes(
-                    slice.try_into().map_err(invalid_data)?,
+                    slice.slice().try_into().map_err(invalid_data)?,
                 ))
             }
         }
@@ -142,8 +125,8 @@ impl<'a> ReadValue<'a> for num_bigint::BigInt {
         check_type!(cql_type, CqlType::BigInt)
     }
 
-    fn read_value(slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(num_bigint::BigInt::from_signed_bytes_be(slice))
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
+        Ok(num_bigint::BigInt::from_signed_bytes_be(&slice))
     }
 }
 
@@ -179,10 +162,11 @@ impl<'a> ReadValue<'a> for bigdecimal::BigDecimal {
         check_type!(cql_type, CqlType::Decimal)
     }
 
-    fn read_value(mut slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
+    fn read_value(mut slice: RowsSlice) -> Result<Self, ParseError> {
+        use crate::cql::ReadCql;
         let scale = i32::read_cql(&mut slice)?;
         Ok(bigdecimal::BigDecimal::new(
-            num_bigint::BigInt::from_signed_bytes_be(slice),
+            num_bigint::BigInt::from_signed_bytes_be(&slice),
             scale as i64,
         ))
     }
@@ -204,8 +188,8 @@ impl<'a> ReadValue<'a> for &'a [u8] {
         check_type!(cql_type, CqlType::Ascii | CqlType::Blob | CqlType::Text)
     }
 
-    fn read_value(slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(slice)
+    fn read_value(slice: RowsSlice<'a>) -> Result<Self, ParseError> {
+        Ok(&slice)
     }
 }
 
@@ -223,8 +207,8 @@ impl<'a> ReadValue<'a> for Bytes {
         check_type!(cql_type, CqlType::Ascii | CqlType::Blob | CqlType::Text)
     }
 
-    fn read_value(slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(envelope.slice_ref(slice))
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
+        Ok(slice.bytes())
     }
 }
 
@@ -242,8 +226,8 @@ impl ReadValue<'_> for bool {
         check_type!(cql_type, CqlType::Boolean)
     }
 
-    fn read_value(slice: &'_ [u8], envelope: &'_ Bytes) -> Result<Self, ParseError> {
-        Ok(i8::read_value(slice, envelope)? != 0)
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
+        Ok(i8::read_value(slice)? != 0)
     }
 }
 
@@ -261,9 +245,9 @@ impl ReadValue<'_> for Ipv4Addr {
         check_type!(cql_type, CqlType::Inet)
     }
 
-    fn read_value(slice: &'_ [u8], _envelope: &'_ Bytes) -> Result<Self, ParseError> {
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
         Ok(Self::from(
-            <[u8; 4]>::try_from(slice).map_err(invalid_data)?,
+            <[u8; 4]>::try_from(slice.slice()).map_err(invalid_data)?,
         ))
     }
 }
@@ -282,9 +266,9 @@ impl ReadValue<'_> for Ipv6Addr {
         check_type!(cql_type, CqlType::Inet)
     }
 
-    fn read_value(slice: &'_ [u8], _envelope: &'_ Bytes) -> Result<Self, ParseError> {
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
         Ok(Self::from(
-            <[u8; 16]>::try_from(slice).map_err(invalid_data)?,
+            <[u8; 16]>::try_from(slice.slice()).map_err(invalid_data)?,
         ))
     }
 }
@@ -309,10 +293,10 @@ impl ReadValue<'_> for IpAddr {
         check_type!(cql_type, CqlType::Inet)
     }
 
-    fn read_value(slice: &'_ [u8], envelope: &'_ Bytes) -> Result<Self, ParseError> {
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
         Ok(match slice.len() {
-            4 => Ipv4Addr::read_value(slice, envelope)?.into(),
-            16 => Ipv6Addr::read_value(slice, envelope)?.into(),
+            4 => Ipv4Addr::read_value(slice)?.into(),
+            16 => Ipv6Addr::read_value(slice)?.into(),
             _ => Err(invalid_data("Invalid IP length"))?,
         })
     }
@@ -332,8 +316,8 @@ impl<'a> ReadValue<'a> for &'a str {
         check_type!(cql_type, CqlType::Ascii | CqlType::Text)
     }
 
-    fn read_value(slice: &'a [u8], _envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(str::from_utf8(slice).map_err(invalid_data)?)
+    fn read_value(slice: RowsSlice<'a>) -> Result<Self, ParseError> {
+        Ok(str::from_utf8(&slice).map_err(invalid_data)?)
     }
 }
 
@@ -351,8 +335,10 @@ impl ReadValue<'_> for Uuid {
         check_type!(cql_type, CqlType::Uuid | CqlType::Timeuuid)
     }
 
-    fn read_value(slice: &'_ [u8], _envelope: &'_ Bytes) -> Result<Self, ParseError> {
-        Ok(Uuid::from_bytes(slice.try_into().map_err(invalid_data)?))
+    fn read_value(slice: RowsSlice) -> Result<Self, ParseError> {
+        Ok(Uuid::from_bytes(
+            slice.slice().try_into().map_err(invalid_data)?,
+        ))
     }
 }
 
@@ -395,7 +381,12 @@ macro_rules! value_tuple {
 
             #[allow(unused_assignments, unused_mut, unused_variables)]
             fn write_value_with_size(&self, buf: &mut &mut [u8]) {
-                self.write_value_with_size_after(buf)
+                // Lifetime dance taken from `impl Write for &mut [u8]`.
+                let (len_slice, buf_slice) = mem::take(buf).split_at_mut(4);
+                *buf = buf_slice;
+                let buf_len = buf.len();
+                self.write_value(buf);
+                len_slice.copy_from_slice(&((buf_len - buf.len()) as u32).to_be_bytes());
             }
         }
         impl<'a, $($tp,)*> ReadValue<'a> for ($($tp,)*)
@@ -416,8 +407,8 @@ macro_rules! value_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables)]
-            fn read_value(mut slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
-                Ok(($($tp::read_value_with_size(&mut slice, envelope)?,)*))
+            fn read_value(mut slice: RowsSlice<'a>) -> Result<Self, ParseError> {
+                Ok(($(slice.parse_value::<$tp>()?,)*))
             }
         }
 
@@ -458,10 +449,10 @@ macro_rules! value_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables)]
-            fn read_value(mut slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
+            fn read_value(mut slice: RowsSlice<'a>) -> Result<Self, ParseError> {
                 Ok((
                     $(if !slice.is_empty() {
-                        $tp::read_value_with_size(&mut slice, envelope)?
+                        slice.parse_value()?
                     } else {
                         $tp::null()?
                     },)*
@@ -519,8 +510,8 @@ where
         T::check_type(cql_type)
     }
 
-    fn read_value(slice: &'a [u8], envelope: &'a Bytes) -> Result<Self, ParseError> {
-        Ok(Some(T::read_value(slice, envelope)?))
+    fn read_value(slice: RowsSlice<'a>) -> Result<Self, ParseError> {
+        Ok(Some(T::read_value(slice)?))
     }
 
     fn null() -> Result<Self, ParseError> {

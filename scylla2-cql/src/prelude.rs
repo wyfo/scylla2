@@ -5,7 +5,7 @@ pub use crate::{
     response::result::rows::{FromRow, Row},
     value::{
         convert::{AsValue, FromValue},
-        iterator::{AsValueIter, FromValueIter},
+        iterator::{AsKeyValueIter, AsValueIter, FromKeyValueIter, FromValueIter},
         Udt,
     },
     Consistency, ProtocolVersion, SerialConsistency,

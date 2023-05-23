@@ -82,3 +82,20 @@ async fn row_type_error() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn lwt_applied() -> anyhow::Result<()> {
+    let session = utils::test_session!();
+    session
+        .execute("CREATE TABLE test (id int PRIMARY KEY)", ())
+        .await?;
+    assert!(session
+        .execute("INSERT INTO test (id) VALUES (0) IF NOT EXISTS", ())
+        .await?
+        .lwt_applied()?);
+    assert!(!session
+        .execute("INSERT INTO test (id) VALUES (0) IF NOT EXISTS", ())
+        .await?
+        .lwt_applied()?);
+    Ok(())
+}
