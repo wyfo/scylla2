@@ -20,7 +20,7 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - Better [performances](#performance), CPU utilisation and memory consumption
 - Builtin support of multiple native CQL protocol versions, can be used with Cassandra 4.0 (which uses protocol v5)
 - Zero-copy deserialization
-- Zero/one allocation per request in normal case (especially thanks to https://github.com/wyfo/swap-buffer-queue)
+- At most one allocation per request – one per read/zero per write – in normal case (especially thanks to https://github.com/wyfo/swap-buffer-queue)
 - Node distance support (so datacenter-aware and whitelist/blacklist possibility)
 - Query plan caching (taking distance in account)
 - Optimized execution path to improve memory locality
@@ -35,28 +35,31 @@ This accumulation of ideas (which I simply enjoy coding on my spare time), with 
 - test, tests, and more tests
 - examples
 - DOCUMENTATION -_-'
-- benchmark
+- Cloud
 - prepare for serverless/tablet partitioning?
 - ...
 
 ## Performance
 
-I've started some benchmark using https://github.com/pkolaczk/latte, and as expected, this driver performs better than the official one.
+I've started some benchmark using https://github.com/pkolaczk/latte/pull/48, and as expected, this driver performs better than the official one.
 
-Single threaded comparison with local database shows 30-40% performance improvement for example. The driver also keeps its at-most-one-allocation promise, so memory consumption is obviously lower by a lot.
+Here are some crude results, running a single node Scylla instance in local Docker:
 
-Fun fact, when benchmark times are similar, mostly because of the database response time, this driver use 30-40% less CPU time.
+|                    | 1M write, 1 thread, 128 concurrent requests/thread                | 1M write, 4 threads, 2048 concurrent requests/thread               |
+|--------------------|-------------------------------------------------------------------|--------------------------------------------------------------------|
+| scylla-rust-driver | elapsed time: 7.068<br/>CPU time: 7.058<br/>CPU utilisation: 12.5 | elapsed time: 3.457<br/>CPU time: 12.235<br/>CPU utilisation: 44.2 |
+| scylla2            | elapsed time: 4.801<br/>CPU time: 4.794<br/>CPU utilisation: 12.5 | elapsed time: 2.821<br/>CPU time: 8.685<br/>CPU utilisation: 38.5  |
+
+The driver also keeps its at-most-one-allocation promise, so memory consumption is obviously lower by a lot.
 
 ## Unsafe
 
-Most of the original unsafe code has been moved into [swap-buffer-queue](https://github.com/wyfo/swap-buffer-queue). `StreamNode` also has been refactored to replace its original unsafe lock-free algorithm with a simple Mutex, as there should be no contention in normal case.
+Most of the original unsafe code has been moved into [swap-buffer-queue](https://github.com/wyfo/swap-buffer-queue). `StreamState` also has been refactored to replace its original unsafe lock-free algorithm with a simple Mutex, as there should be no contention in normal case.
 
 However, [`Write::write_all_vectored`](https://doc.rust-lang.org/std/io/trait.Write.html#method.write_all_vectored) being currently unstable (and thus `tokio::io::AsyncWriteExt::write_all_vectored` too), it's implemented directly in the driver, but it requires an `unsafe` section because [`IoSlice::advance`](hhttps://doc.rust-lang.org/std/io/struct.IoSlice.html#method.advance) is also unstable for the moment. In order to keep the code safe, waiting for the stabilization, this implementation is hidden behind a feature flag, and replaced by a simple loop by default.
 
 (`Write::write_all_vectored` is only used for big payloads which do not fit in the write buffer and are thus allocated)
 
 ## What's next
-
-I've made this project without telling Scylla developers, so, obviously I will have to talk with them.
 
 Actually, I've a second secret project about Scylla and Rust, that I've paused when I started working on this driver. So stay tuned! ;) 
