@@ -56,7 +56,7 @@ pub enum CqlValue {
 impl CqlValue {
     pub fn parse(tp: &CqlType, slice: &mut RowsSlice) -> Result<Option<Self>, ParseError> {
         let Some(slice) = slice.parse_value_slice()? else {
-            return Ok(None)
+            return Ok(None);
         };
         Ok(Some(match tp {
             CqlType::Ascii => {

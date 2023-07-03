@@ -20,13 +20,13 @@ impl Connection {
         loop {
             tokio::select! {
                 biased;
-                Ok(mut slice) = self.slice_queue.dequeue() => {
+                Ok(mut slice) = self.slice_queue.dequeue_async() => {
                     self.write_slice(&mut writer, &mut slice).await?;
                     if let Ok(mut vectored) = self.vectored_queue.try_dequeue() {
                         self.write_vectored(&mut writer, &mut vectored).await?;
                     }
                 }
-                Ok(mut vectored) = self.vectored_queue.dequeue() => {
+                Ok(mut vectored) = self.vectored_queue.dequeue_async() => {
                     self.write_vectored(&mut writer, &mut vectored).await?;
                 }
                 else => return writer.shutdown().await,

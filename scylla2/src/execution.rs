@@ -86,8 +86,8 @@ where
             let mut executions = FuturesUnordered::new();
             loop {
                 executions.push(self.run_retry(&iterator, token));
-                let Some(delay) =  speculative.next_delay(executions.len()) else {
-                    return executions.next().await.unwrap()
+                let Some(delay) = speculative.next_delay(executions.len()) else {
+                    return executions.next().await.unwrap();
                 };
                 tokio::select! {
                     biased;
@@ -144,7 +144,9 @@ where
                         );
                     }
                     Ok(Err(err)) if matches!(err.kind, DatabaseErrorKind::Unprepared { .. }) => {
-                        let DatabaseErrorKind::Unprepared { statement_id } = &err.kind else { unreachable!() };
+                        let DatabaseErrorKind::Unprepared { statement_id } = &err.kind else {
+                            unreachable!()
+                        };
                         match self.statement.reprepare(statement_id) {
                             Some(statement) => {
                                 #[cfg(feature = "tracing")]

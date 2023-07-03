@@ -26,7 +26,7 @@ use scylla2_cql::{
 };
 use swap_buffer_queue::{
     error::EnqueueError, write::WriteVecBuffer, write_vectored::WriteVectoredVecBuffer,
-    AsyncSBQueue, SBQueue,
+    SynchronizedQueue,
 };
 use tokio::{
     io::{BufReader, ReadHalf},
@@ -54,8 +54,9 @@ pub struct Connection {
     compression_min_size: usize,
     ongoing_requests: AtomicUsize,
     pending_executions: Notify,
-    slice_queue: AsyncSBQueue<WriteVecBuffer<FRAME_COMPRESSED_HEADER_SIZE, FRAME_TRAILER_SIZE>>,
-    vectored_queue: AsyncSBQueue<WriteVectoredVecBuffer<Vec<u8>>>,
+    slice_queue:
+        SynchronizedQueue<WriteVecBuffer<FRAME_COMPRESSED_HEADER_SIZE, FRAME_TRAILER_SIZE>>,
+    vectored_queue: SynchronizedQueue<WriteVectoredVecBuffer<Vec<u8>>>,
     stream_pool: StreamPool,
 }
 
@@ -110,9 +111,9 @@ impl Connection {
         write_buffer_size: usize,
         orphan_count_threshold: usize,
     ) -> Self {
-        let slice_queue = SBQueue::with_capacity(write_buffer_size);
+        let slice_queue = SynchronizedQueue::with_capacity(write_buffer_size);
         slice_queue.close();
-        let vectored_queue = SBQueue::with_capacity(100);
+        let vectored_queue = SynchronizedQueue::with_capacity(100);
         vectored_queue.close();
         Self {
             version,
@@ -193,7 +194,7 @@ impl Connection {
                 &mut vec![0; size],
             );
             check_size(bytes.len())?;
-            match self.vectored_queue.enqueue(bytes).await {
+            match self.vectored_queue.enqueue_async(bytes).await {
                 Ok(_) => {}
                 Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                 Err(EnqueueError::InsufficientCapacity(_)) => unreachable!(),
@@ -210,13 +211,13 @@ impl Connection {
                     slice,
                 );
             };
-            match self.slice_queue.enqueue((size, write)).await {
+            match self.slice_queue.enqueue_async((size, write)).await {
                 Ok(_) => {}
                 Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                 Err(EnqueueError::InsufficientCapacity(_)) => {
                     let mut vec = vec![0; size];
                     write(&mut vec);
-                    match self.vectored_queue.enqueue(vec).await {
+                    match self.vectored_queue.enqueue_async(vec).await {
                         Ok(_) => {}
                         Err(EnqueueError::Closed(_)) => return Err(RequestError::ConnectionClosed),
                         Err(EnqueueError::InsufficientCapacity(_)) => unreachable!(),

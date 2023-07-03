@@ -262,8 +262,12 @@ fn network_topology_replicas(
     let mut by_datacenter: BTreeMap<&str, (HashSet<HashableNode>, HashSet<Option<&str>>)> =
         BTreeMap::new();
     for (_, node) in token_map.range(token..).chain(token_map.range(..token)) {
-        let Some(dc) = node.peer().datacenter.as_deref() else {continue};
-        let Some(&rf) = datacenters.get(dc) else {continue};
+        let Some(dc) = node.peer().datacenter.as_deref() else {
+            continue;
+        };
+        let Some(&rf) = datacenters.get(dc) else {
+            continue;
+        };
         let (dc_nodes, dc_racks) = by_datacenter.entry(dc).or_default();
         if dc_nodes.len() == rf {
             continue;

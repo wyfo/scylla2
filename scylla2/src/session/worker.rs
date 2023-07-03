@@ -69,7 +69,7 @@ async fn reopen_control_connection(inner: &SessionInner, events: mpsc::Unbounded
             .filter(|node| node.is_up())
             .map(|node| (node, &inner.node_config_remote));
         for (node, node_config) in local.chain(remote) {
-            let Some(address )= node.address() else {
+            let Some(address) = node.address() else {
                 continue;
             };
             match inner

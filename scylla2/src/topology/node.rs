@@ -314,7 +314,7 @@ impl Node {
     pub fn get_sharded_connections(&self, token: Option<Token>) -> Option<&[Connection]> {
         let pool = self.connection_pool.get()?;
         let (Some(sharder), Some(token)) = (&pool.sharder, token) else {
-          return Some(&pool.connections)
+            return Some(&pool.connections);
         };
         let shard = sharder.compute_shard(token);
         let conn_per_shard = pool.connections.len() / sharder.nr_shards().get() as usize;
@@ -344,8 +344,8 @@ impl Node {
     }
 
     pub async fn check_schema_agreement(&self) -> Result<Option<Uuid>, ExecutionError> {
-        let Some(conn )= self.get_random_connection() else {
-            return Ok(None)
+        let Some(conn) = self.get_random_connection() else {
+            return Ok(None);
         };
         let local_query = cql_query(
             "SELECT schema_version FROM system.local WHERE key = 'local'",
@@ -440,8 +440,12 @@ impl Node {
     }
 
     async fn update_address(self: &Arc<Node>, address_translator: &dyn AddressTranslator) {
-        let Some(address) = address_translator.translate_or_warn(&self.peer, self.session_event_handler.as_ref()).await.ok() else {
-            return
+        let Some(address) = address_translator
+            .translate_or_warn(&self.peer, self.session_event_handler.as_ref())
+            .await
+            .ok()
+        else {
+            return;
         };
         let prev_addr = self.address.lock().unwrap().replace(address);
         if prev_addr.map_or(false, |prev| prev == address) {

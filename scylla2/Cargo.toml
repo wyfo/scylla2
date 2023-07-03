@@ -27,8 +27,8 @@ rand = "0.8"
 scylla2-cql = { path = "../scylla2-cql", default-features = false, features = ["protocol"] }
 socket2 = "0.5"
 sharded-slab = "0.1.4"
-strum = "0.24"
-swap-buffer-queue = { git = "https://github.com/wyfo/swap-buffer-queue", features = ["async", "write", "write-vectored"] }
+strum = "0.25.0"
+swap-buffer-queue = { version = "0.1", features = ["write"] }
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time", "macros"] }
 tokio-openssl = { version = "0.6", optional = true }

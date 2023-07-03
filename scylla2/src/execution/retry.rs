@@ -107,7 +107,9 @@ impl RetryPolicy for ConsistencyDowngradingRetryPolicy {
         if decision != RetryDecision::DoNotRetry || retry_count > 0 {
             return decision;
         }
-        let RetryableError::Database(db_error) = error else { unreachable!() };
+        let RetryableError::Database(db_error) = error else {
+            unreachable!()
+        };
         if let DatabaseErrorKind::Unavailable {
             consistency,
             alive: received,
