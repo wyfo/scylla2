@@ -268,19 +268,6 @@ impl<'a> FromValue<'a> for chrono::DateTime<chrono::Utc> {
         Ok(chrono::Utc.timestamp_millis_opt(value).unwrap())
     }
 }
-#[cfg(feature = "chrono")]
-impl<'a> FromValue<'a> for chrono::DateTime<chrono::Local> {
-    type Value = i64;
-
-    fn check_type(cql_type: &CqlType) -> Result<(), BoxedError> {
-        crate::value::check_type!(cql_type, CqlType::Timestamp)
-    }
-
-    fn from_value(value: Self::Value) -> Result<Self, BoxedError> {
-        use chrono::TimeZone;
-        Ok(chrono::Local.timestamp_millis_opt(value).unwrap())
-    }
-}
 
 #[cfg(feature = "chrono")]
 impl AsValue for chrono::NaiveTime {
@@ -300,10 +287,10 @@ impl<'a> FromValue<'a> for chrono::NaiveTime {
     }
 
     fn from_value(value: Self::Value) -> Result<Self, BoxedError> {
-        Ok(chrono::NaiveTime::from_num_seconds_from_midnight_opt(
+        chrono::NaiveTime::from_num_seconds_from_midnight_opt(
             (value / 1_000_000_000) as u32,
             (value % 1_000_000_000) as u32,
         )
-        .unwrap())
+        .ok_or("Invalid time: more than 86400s".into())
     }
 }
